@@ -1,0 +1,6 @@
+playwright>=1.49
+requests>=2.32
+pyyaml>=6.0
+openpyxl>=3.1
+# 可选：本地 ASR（未配置豆包 ASR 时使用）
+# faster-whisper>=1.1

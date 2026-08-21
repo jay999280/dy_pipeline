@@ -1,0 +1,17 @@
+# 运行数据与产物（含抖音登录态、视频帧、逐字稿、模型文件——绝不入库）
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 临时/锁文件
+~$*.xlsx
+*.log
+
+# IDE
+.vscode/
+.idea/

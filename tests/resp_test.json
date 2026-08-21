@@ -1,0 +1,1 @@
+{"model":"deepseek-v4-pro","input":"只输出JSON对象：{\"ok\": true, \"名字\": \"测试\"}","text":{"format":{"type":"json_object"}}}
