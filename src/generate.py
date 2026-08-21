@@ -285,11 +285,22 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
     emotion = a.get("情绪共鸣点") or []
     cta_design = a.get("结尾互动引导") or {}
     cta_lines = "\n".join(f'- "{c}"' for c in _cta_lib(card))
+    tags = card.get("客户标签") or []
+    persona = card.get("人设档案") or {}
+    persona_kuotou = persona.get("口头禅") or []
+    persona_block = ""
+    if persona:
+        persona_block = (f"语气：{persona.get('语气', '')}｜表达习惯：{persona.get('表达习惯', '')}"
+                         f"｜口头禅：{'、'.join(persona_kuotou)}")
+    scenes = (card.get("客户画像") or {}).get("可拍摄场景") or []
+    scene_list = "、".join(str(s) for s in scenes)
     return f"""你是抖音短视频编导。任务：把下面这一条【对标视频】**内容跟随式改编**成一条 {lo}~{hi} 秒的【客户】脚本（本赛道第 {script_no} 条）。
 
 【客户业务】{card.get('业务简介', '').strip()}
 【客户卖点】{'、'.join(card.get('卖点') or [])}
 【客户人设】{card.get('人设', '')}
+【客户标签】{'、'.join(tags) if tags else '（无）'}
+【人设档案】{persona_block or '（无）'}
 【目标客户】{card.get('目标客户', '')}
 【排除规则】{card.get('排除规则', '')}
 
@@ -319,7 +330,7 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
 1. 话题跟随：参考视频讲什么话题，你的脚本就讲什么话题，不得换话题。只替换品牌名、地区、报价方式、联系方式等客户特有信息
 2. 论点跟随：核心论点、论证顺序、例子逐条对应保留，换成客户语境下的同类表达
 3. 钩子跟随（七型）：前 3 秒按参考视频的钩子类型重写，类型从「反常识/痛点/悬念/冲突/信息差/利益承诺/共鸣」中选，参考视频用什么型就用什么型，禁止"大家好我是…"平铺开场。句式参考：价值型"花了XX元解决了困扰3年的问题"、共鸣型"是不是每次XX都受不了"、悬念型"我发现一个XX行业不告诉你的秘密"
-4. 语气跟随 + 个人风格：保留参考视频语气特征，同时融入客户人设的口头禅与表达习惯（见【客户人设】），让脚本"像客户本人说出来的话"
+4. 语气跟随 + 个人风格：保留参考视频语气特征，同时严格贴合【客户标签】与【人设档案】——口头禅自然带入口播、用客户的表达习惯（先结论后解释/短句/多用"你"对话），让脚本"像客户本人说出来的话"，而不是通用的营销腔
 5. 段落跟随 + 秒级基准：镜头数量与段落对应；参考结构混乱时用基准——0-3s 钩子 → 4-6s 痛点放大 → 7-12s 方案引入 → 13-20s 演示/成果 → 21-26s 数据/前后对比 → 27-35s 价值一句话+互动引导。目标完播率>40%，信息密度前置、无冗余铺垫
 6. 红线：允许句子骨架相似但不得连续 20 字逐字照抄；数字/尺寸/价格/材料承诺留白（"以实测为准/私信发资料"）；产品植入放方案段；禁用绝对化用语（"最好/第一/100%有效/全网最低"）
 7. 时长 {lo}~{hi} 秒：文案总量 {lo*4}~{hi*4} 字，5~8 个镜头
@@ -337,7 +348,7 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
 
 {mode_lib}
 
-只输出一个 JSON 对象：{{"发布文案":"带3-5个话题标签的发布文案","参考视频":"{ref_vid}","参考主题":"一句话复述参考视频讲什么","改编说明":"跟了什么·换成了什么·本土化/个人风格体现在哪（一句）","镜头":[{{"时间":"0-5s","景别":"远景|全景|中景|近景|特写","画面":"拍什么（含道具/手势）","文案":"口播说什么","拍摄提示":"场景/道具/表演要点"}}],"字幕建议":"全程字幕+哪些关键词做花字","音效建议":"BGM情绪+关键音效点"}}"""
+只输出一个 JSON 对象：{{"发布文案":"带3-5个话题标签的发布文案","参考视频":"{ref_vid}","参考主题":"一句话复述参考视频讲什么","改编说明":"必须输出：跟了对标的什么话题/结构，换成了客户的什么（品牌/地区/案例），差异化体现在哪（一句）","镜头":[{{"时间":"0-5s","景别":"远景|全景|中景|近景|特写","场景":"从可拍摄场景[{scene_list}]里选一个","画面":"一句话点明拍什么（≤15字，不写详细运镜）","文案":"口播说什么","拍摄提示":"场景+关键道具，一句话（≤15字）"}}],"字幕建议":"全程字幕+哪些关键词做花字","音效建议":"BGM情绪"}}"""
 
 
 def ensure_shot_times(scripts_by_track: dict, card: dict):
@@ -488,7 +499,7 @@ def structure_similarity(a: dict, b: dict) -> float:
     return _similarity("-".join(map(str, sa)), "-".join(map(str, sb)))
 
 
-def check_structure_dupes(scripts_by_track: dict, threshold: float = 0.8) -> list:
+def check_structure_dupes(scripts_by_track: dict, threshold: float = 0.95) -> list:
     """同池脚本两两比对结构相似度，>阈值提示"换叙事顺序"。"""
     warns = []
     all_s = [(f"{tname}#{i}", s) for tname, lst in scripts_by_track.items() for i, s in enumerate(lst, 1)]
@@ -517,13 +528,12 @@ def make_shooting_sheet(wb, scripts_by_track: dict, card: dict):
             for shot in s.get("镜头", []):
                 all_shots.append({"脚本": f"{tname}#{si}", **shot})
 
-    # 按场景归类（画面+拍摄提示 匹配场景关键词）
+    # 按场景字段归类（镜头显式输出"场景"，准确）
     scene_map = {sc: [] for sc in scenes}
     other = []
     for sh in all_shots:
-        txt = str(sh.get("画面", "")) + str(sh.get("拍摄提示", ""))
-        matched = next((sc for sc in scenes
-                        if any(k and k in txt for k in str(sc).split("/"))), None)
+        sc = sh.get("场景", "")
+        matched = sc if sc in scene_map else None
         (scene_map[matched] if matched else other).append(sh)
 
     ws.cell(1, 1, "拍摄执行包（按场景聚合，同场景镜头可集中一天拍完）").font = _FONT_BOLD
@@ -619,10 +629,12 @@ def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict, car
             style(c, wrap=False, font=_FONT_LINK, fill=_FILL_SCRIPT)
             if ref:
                 c.hyperlink = ref
-            caption = f"脚本{si}｜{s.get('改编角度', '')}｜{s.get('发布文案', '')}"
+            ref_title = by_id.get(vid, {}).get("desc", "")[:20]
+            origin = f"对标：{ref_title or vid}" if vid else "原创"
             note = s.get("改编说明", "")
-            if note:
-                caption += f"｜{note}"
+            if not note:
+                note = "改编自对标视频，话题/论点跟随，换客户品牌地区" if vid else "原创脚本，思路见发布文案"
+            caption = f"脚本{si}｜{origin}｜{note}｜{s.get('发布文案', '')}"
             c2 = ws.cell(row=r, column=2, value=caption)
             style(c2, font=_FONT_BOLD, fill=_FILL_SCRIPT, align=_LEFT_WRAP)
             for ci in (3, 4):
@@ -636,13 +648,10 @@ def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict, car
                 pic = shot.get("画面", "")
                 text = shot.get("文案", "")
                 ts = shot.get("时间", "")
+                sc = shot.get("场景", "")
                 jing = shot.get("景别", "")
-                tip = shot.get("拍摄提示", "")
-                pic_show = f"[{ts}] {pic}" if ts else pic
-                if jing:
-                    pic_show = f"[{jing}] {pic_show}"
-                if tip:
-                    pic_show += f"（拍：{tip}）"
+                tags = " ".join(f"[{p}]" for p in (ts, sc, jing) if p)
+                pic_show = f"{tags} {pic}".strip() if (tags or pic) else ""
                 for ci in (1, 2):
                     cc = ws.cell(row=r, column=ci, value="")
                     style(cc)

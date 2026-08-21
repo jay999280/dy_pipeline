@@ -179,6 +179,7 @@ def main():
 
     log.info("视觉拆解：%d 条视频，模型 %s，间隔 %.1fs", len(items), _model(card), _interval(card))
     done = 0
+    import random as _random
     for v in items:
         try:
             shots = analyze_frames(v, d, card, api_key)
@@ -188,6 +189,8 @@ def main():
                          done, len(items), v["aweme_id"], len(shots))
         except Exception as e:
             log.error("视觉拆解失败 %s: %s", v["aweme_id"], e)
+        # 下载/采集间隔，缓解抖音批量下载风控
+        time.sleep(_random.uniform(2.0, 5.0))
 
 
 if __name__ == "__main__":
