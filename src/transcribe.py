@@ -17,7 +17,7 @@ from pathlib import Path
 
 import requests
 
-from common import UA, load_card, read_json, run_dir, setup_log
+from common import UA, load_card, read_json, run_dir, setup_log, write_json
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,36 @@ def extract_audio(mp4: Path, wav: Path):
     )
 
 
-def asr_doubao(wav: Path) -> str:
+def extract_frames(mp4: Path, frames_dir: Path, interval: float) -> list:
+    """ffmpeg 按 interval 秒抽帧（视觉拆解用），返回帧文件路径列表。"""
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    pattern = frames_dir / "frame_%04d.jpg"
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(mp4), "-vf", f"fps=1/{interval}", "-q:v", "3", str(pattern)],
+        check=True, capture_output=True,
+    )
+    return sorted(frames_dir.glob("frame_*.jpg"))
+
+
+def _doubao_segments(body: dict) -> list:
+    """从豆包 ASR 响应提取句级时间戳（毫秒→秒）。字段缺失时返回空列表（降级为无时间戳）。"""
+    segs = []
+    for u in body.get("utterances") or []:
+        t = u.get("text")
+        if not t:
+            continue
+        s = u.get("start_time", u.get("start"))
+        e = u.get("end_time", u.get("end"))
+        segs.append({
+            "start": round((float(s) if s is not None else 0) / 1000, 2),
+            "end": round((float(e) if e is not None else 0) / 1000, 2),
+            "text": str(t),
+        })
+    return segs
+
+
+def asr_doubao(wav: Path):
+    """豆包语音识别大模型 → (全文, 句级时间戳列表)。"""
     appid = os.environ.get("VOLC_ASR_APPID")
     token = os.environ.get("VOLC_ASR_ACCESS_TOKEN")
     if not appid or not token:
@@ -66,6 +95,7 @@ def asr_doubao(wav: Path) -> str:
             "model_name": "bigmodel",
             "enable_punc": True,
             "enable_itn": True,
+            "enable_utt": True,      # 开启句级时间戳（utterances）
             "result_type": "full",
             "language": "zh-CN",
         },
@@ -75,7 +105,7 @@ def asr_doubao(wav: Path) -> str:
     resp = r.json()
     body = resp.get("resp") or resp
     if body.get("status_code") == 2000:
-        return (body.get("text") or "").strip()
+        return (body.get("text") or "").strip(), _doubao_segments(body)
     task_id = resp.get("id")
     if not task_id:
         raise RuntimeError(f"豆包ASR提交失败: {json.dumps(resp, ensure_ascii=False)[:400]}")
@@ -87,7 +117,7 @@ def asr_doubao(wav: Path) -> str:
         q.raise_for_status()
         qr = q.json().get("resp") or q.json()
         if qr.get("status_code") == 2000:
-            return (qr.get("text") or "").strip()
+            return (qr.get("text") or "").strip(), _doubao_segments(qr)
         if qr.get("status_code") in (2001, 2002):  # 处理中
             continue
         raise RuntimeError(f"豆包ASR失败: {json.dumps(q.json(), ensure_ascii=False)[:400]}")
@@ -109,33 +139,58 @@ def get_whisper():
     return _whisper_model
 
 
-def asr_whisper(wav: Path) -> str:
+def asr_whisper(wav: Path):
+    """本地 faster-whisper → (全文, 句级时间戳列表)。segments 自带 start/end。"""
     model = get_whisper()
     segments, _ = model.transcribe(str(wav), language="zh", vad_filter=True)
-    return "".join(seg.text for seg in segments).strip()
+    segs = []
+    text = ""
+    for seg in segments:
+        text += seg.text
+        segs.append({
+            "start": round(float(seg.start), 2),
+            "end": round(float(seg.end), 2),
+            "text": seg.text.strip(),
+        })
+    return text.strip(), segs
 
 
-def transcribe_one(item: dict, out_dir: Path, engine: str) -> str:
-    """下载→提取音频→转写→删视频，返回逐字稿文本。"""
+def transcribe_one(item: dict, out_dir: Path, engine: str, interval: float = 2.5) -> dict:
+    """下载→提取音频→转写→抽帧→删视频，返回 {"text": str, "segments": [...]}。
+    同时写 transcripts/<id>.txt（纯文本，兼容旧读取）与 transcripts/<id>.json（带时间戳）。
+    抽帧产物存 vision/<id>/（供视觉拆解层消费），视频转完即删。"""
     aid = item["aweme_id"]
     out_dir.mkdir(parents=True, exist_ok=True)
     txt = out_dir / f"{aid}.txt"
+    jso = out_dir / f"{aid}.json"
     if txt.exists() and txt.read_text(encoding="utf-8").strip():
-        return txt.read_text(encoding="utf-8").strip()
+        text = txt.read_text(encoding="utf-8").strip()
+        if jso.exists():
+            data = read_json(jso) or {}
+            return {"text": text, "segments": data.get("segments", [])}
+        return {"text": text, "segments": []}  # 旧数据无时间戳
 
     play = item.get("play_url")
     if not play:
         log.warning("[%s] 无播放地址，跳过", aid)
-        return ""
+        return {"text": "", "segments": []}
     mp4 = out_dir / f"{aid}.mp4"
     wav = out_dir / f"{aid}.wav"
     try:
         download_video(play, mp4)
         extract_audio(mp4, wav)
-        text = asr_doubao(wav) if engine == "doubao" else asr_whisper(wav)
+        text, segs = asr_doubao(wav) if engine == "doubao" else asr_whisper(wav)
         if text:
             txt.write_text(text, encoding="utf-8")
-        return text
+            write_json(jso, {"text": text, "segments": segs})
+        # 抽帧（视觉拆解用）：帧图保留，视频随后删除
+        frames_dir = out_dir.parent / "vision" / aid
+        if not frames_dir.exists() or not any(frames_dir.glob("frame_*.jpg")):
+            try:
+                extract_frames(mp4, frames_dir, interval)
+            except Exception as e:
+                log.warning("[%s] 抽帧失败（跳过视觉）: %s", aid, e)
+        return {"text": text, "segments": segs}
     finally:
         for f in (mp4, wav):  # 需求确认：转完即删视频与音频
             if f.exists():
@@ -174,10 +229,13 @@ def main():
     log.info("转写引擎: %s，共 %d 条", engine, len(items))
 
     out_dir = d / "transcripts"
+    interval = float(card.get("视觉设置", {}).get("抽帧间隔秒", 2.5))
     for i, item in enumerate(items, 1):
         try:
-            text = transcribe_one(item, out_dir, engine)
-            log.info("[%d/%d] %s -> %d 字", i, len(items), item["aweme_id"], len(text))
+            res = transcribe_one(item, out_dir, engine, interval)
+            n_seg = len(res.get("segments", []))
+            log.info("[%d/%d] %s -> %d 字（%d 段时间戳）",
+                     i, len(items), item["aweme_id"], len(res.get("text", "")), n_seg)
         except Exception as e:
             log.error("[%d/%d] %s 转写失败: %s", i, len(items), item["aweme_id"], e)
 

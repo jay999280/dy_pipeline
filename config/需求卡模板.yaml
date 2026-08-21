@@ -64,6 +64,10 @@
   引擎: auto                 # auto=有豆包ASR密钥用豆包，否则本地whisper；或指定 doubao / whisper
   语言: zh
 
+视觉设置:                    # 视觉拆解层（GLM 看帧，看懂画面内容）
+  模型: glm-4v-flash         # 免费档；拆解质量不满意可换 glm-4.5v（按量计费）
+  抽帧间隔秒: 2.5            # 每几秒抽一帧给视觉模型看
+
 语料扩充账号:                # collect_more 语料来源账号（每项 昵称 + sec_uid）；无则复用 account_pool.json
   # - 昵称: 某某官方号
   #   sec_uid: MS4wLjABAAAAxxxx

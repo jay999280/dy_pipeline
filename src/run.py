@@ -21,7 +21,7 @@ from common import load_card, read_json, run_dir, stage_done, setup_log
 
 SRC = Path(__file__).resolve().parent
 
-STAGES = ["account_screen", "video_screen", "transcribe", "analyze", "cluster", "distill", "generate"]
+STAGES = ["account_screen", "video_screen", "transcribe", "vision", "analyze", "cluster", "distill", "generate"]
 # 不进默认链、但可通过 --only 单独跑的阶段（周期性/可选任务）
 OPTIONAL = ["feedback", "collect_more"]
 
@@ -31,6 +31,7 @@ def stage_output(d: Path, stage: str) -> Path:
         "account_screen": d / "accounts_selected.json",   # 已确认账号列表
         "video_screen": d / "videos_selected.json",        # 已确认视频列表
         "transcribe": d / "transcripts",                   # 目录，非空即视为完成
+        "vision": d / "vision",                            # 目录，有 json 即视为完成
         "analyze": d / "analysis.json",
         "cluster": d / "tracks.json",
         "distill": d.parent / "distill" / "模式库.json",   # 客户级知识资产，跨 run 复用
@@ -43,6 +44,8 @@ def is_done(d: Path, stage: str) -> bool:
     if stage == "feedback":
         return False  # 周期性任务，有新数据就重跑
     out = stage_output(d, stage)
+    if stage == "vision":
+        return out.exists() and any(out.glob("*.json"))
     if stage in ("account_screen", "video_screen"):
         data = read_json(out) or []
         return len(data) > 0          # 人工确认文件已填写才算完成
