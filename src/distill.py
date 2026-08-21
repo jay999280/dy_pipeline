@@ -118,7 +118,7 @@ def main():
     log.info("待蒸馏 %d 条（已蒸馏的自动跳过）", len(todo))
 
     done = 0
-    with cf.ThreadPoolExecutor(max_workers=2) as ex:
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
         futs = {
             ex.submit(distill_one, it["video"], it["transcript"], it["analysis"], api_key): vid
             for vid, it in todo

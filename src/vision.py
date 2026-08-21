@@ -27,7 +27,7 @@ from transcribe import download_video, extract_frames
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "glm-4v-flash"   # 免费档默认；可配 glm-4.5v
-DEFAULT_INTERVAL = 2.5
+DEFAULT_INTERVAL = 5.0
 BATCH = 6                        # 每批喂给视觉模型的帧数
 
 

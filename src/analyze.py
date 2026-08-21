@@ -266,7 +266,7 @@ def main():
     tdir = d / "transcripts"
     log.info("分析 %d 条视频", len(items))
     results = []
-    with cf.ThreadPoolExecutor(max_workers=2) as ex:
+    with cf.ThreadPoolExecutor(max_workers=4) as ex:
         futs = []
         for v in items:
             txt = assemble_context(d, tdir, v)

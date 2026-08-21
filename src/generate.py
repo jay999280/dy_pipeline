@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """⑤ 生成：按赛道批量生成脚本，输出「对标链接｜发布文案｜画面｜文案」Excel。"""
+import concurrent.futures as cf
 import difflib
 import json
 import logging
@@ -426,13 +427,16 @@ def gen_captions(script: dict, card: dict, api_key: str) -> list:
 
 # ---------- LLM Judge：四维评分 + 镜头级定位 ----------
 def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_key: str) -> dict:
-    """四维评分（对标匹配度/原创度/可执行性/红线合规）+ 镜头级问题定位。"""
+    """四维评分（并发）+ 镜头级问题定位。"""
     out = {}
-    for tname, scripts in scripts_by_track.items():
-        for i, s in enumerate(scripts, 1):
-            ref = analysis_map.get(str(s.get("参考视频", "")), {})
-            hook_type = (ref.get("钩子设计") or {}).get("类型", "")
-            prompt = f"""你是短视频质量评审。下面是一条改编脚本，请按四维评分（每维 1-10 + 一句依据 + 问题镜头定位）。
+    items = [(tname, i, s) for tname, scripts in scripts_by_track.items()
+             for i, s in enumerate(scripts, 1)]
+
+    def _judge_one(item):
+        tname, i, s = item
+        ref = analysis_map.get(str(s.get("参考视频", "")), {})
+        hook_type = (ref.get("钩子设计") or {}).get("类型", "")
+        prompt = f"""你是短视频质量评审。下面是一条改编脚本，请按四维评分（每维 1-10 + 一句依据 + 问题镜头定位）。
 只输出 JSON：{{"对标匹配度":1到10,"对标依据":"一句话","原创度":1到10,"原创依据":"一句话","可执行性":1到10,"可执行依据":"一句话","红线合规":1到10,"红线依据":"一句话","问题镜头":[{{"镜头序号":数字,"问题":"钩子弱/台词拖沓/时长失衡/景别不当","建议":"一句话"}}]}}
 评分依据：
 - 对标匹配度：话题/论点顺序/钩子类型是否跟随对标（对标钩子类型：{hook_type}）
@@ -441,14 +445,23 @@ def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_ke
 - 红线合规：时长达标、无 20 字照抄、无绝对化用语、无事实编造、CTA 在位、钩子非平铺
 
 脚本：{json.dumps(s, ensure_ascii=False)}"""
-            try:
-                r = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.2)
-                r["_四维均分"] = round(
-                    sum(float(r.get(k, 0) or 0) for k in ("对标匹配度", "原创度", "可执行性", "红线合规")) / 4, 1)
-                s["评审"] = r
+        try:
+            r = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.2)
+            r["_四维均分"] = round(
+                sum(float(r.get(k, 0) or 0) for k in ("对标匹配度", "原创度", "可执行性", "红线合规")) / 4, 1)
+            return tname, i, r
+        except Exception as e:
+            log.warning("[%s]#%d judge 失败: %s", tname, i, e)
+            return tname, i, None
+
+    workers = max(1, min(4, len(items)))
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(_judge_one, it) for it in items]
+        for fut in cf.as_completed(futs):
+            tname, i, r = fut.result()
+            if r:
+                scripts_by_track[tname][i - 1]["评审"] = r
                 out[f"{tname}#{i}"] = r
-            except Exception as e:
-                log.warning("[%s]#%d judge 失败: %s", tname, i, e)
     return out
 
 
@@ -780,16 +793,14 @@ def main():
     if args.force:
         scripts_by_track = {}  # 强制重新生成全部脚本
 
-    for t in tracks:
+    def _gen_track(t):
+        """并发生成一个赛道的全部脚本（赛道内串行保持选题去重）。"""
         tname = t.get("名称", "赛道")
         if tname in scripts_by_track:
-            log.info("赛道[%s] 已有 %d 条脚本，跳过生成", tname, len(scripts_by_track[tname]))
-            continue
-        # 赛道参考池：每条脚本绑定一条不同的参考视频（主题匹配+有逐字稿）
+            return tname, None, "已有脚本跳过"
         pool = build_ref_pool(t, analysis, by_id, tdir, n_per)
         if not pool:
-            log.error("赛道[%s] 没有可用参考视频（需有逐字稿）", tname)
-            continue
+            return tname, None, "没有可用参考视频"
         transcripts = {}
         for vid in pool:
             tf = tdir / f"{vid}.txt"
@@ -824,9 +835,21 @@ def main():
         if len(track_scripts) < n_per and tname in old_all:
             log.error("赛道[%s] 生成不完整(%d/%d)，保留旧脚本", tname, len(track_scripts), n_per)
             track_scripts = old_all[tname]
-        if track_scripts:
-            scripts_by_track[tname] = track_scripts
-            log.info("赛道[%s] 共 %d 条脚本", tname, len(track_scripts))
+        return tname, track_scripts, ""
+
+    # 赛道级并发生成（3 赛道并行，每赛道内串行保持选题去重）
+    todo_tracks = [t for t in tracks if t.get("名称") not in scripts_by_track]
+    workers = max(1, min(3, len(todo_tracks)))
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = [ex.submit(_gen_track, t) for t in todo_tracks]
+        for fut in cf.as_completed(futs):
+            tname, track_scripts, err = fut.result()
+            if err:
+                log.error("赛道[%s] %s", tname, err)
+                continue
+            if track_scripts:
+                scripts_by_track[tname] = track_scripts
+                log.info("赛道[%s] 共 %d 条脚本", tname, len(track_scripts))
 
     if not scripts_by_track:
         log.error("全部赛道生成失败，未覆盖旧结果（scripts.json 与 xlsx 保持不变）")
@@ -855,12 +878,21 @@ def main():
     else:
         log.info("卖点覆盖矩阵已生成，%d 个卖点全部被覆盖", cov["卖点数"])
 
-    # ---- 发布文案三候选 ----
-    for lst in scripts_by_track.values():
-        for s in lst:
-            caps = gen_captions(s, card, api_key)
+    # ---- 发布文案三候选（并发） ----
+    _cap_items = [(tname, si, s) for tname, lst in scripts_by_track.items()
+                  for si, s in enumerate(lst)]
+
+    def _cap_one(item):
+        tname, si, s = item
+        return tname, si, gen_captions(s, card, api_key)
+
+    _cap_workers = max(1, min(4, len(_cap_items)))
+    with cf.ThreadPoolExecutor(max_workers=_cap_workers) as ex:
+        _futs = [ex.submit(_cap_one, it) for it in _cap_items]
+        for _fut in cf.as_completed(_futs):
+            tname, si, caps = _fut.result()
             if caps:
-                s["标题候选"] = caps
+                scripts_by_track[tname][si]["标题候选"] = caps
 
     # ---- LLM Judge：四维评分 + 镜头级定位 ----
     judge_scripts(scripts_by_track, card, analysis_map, api_key)

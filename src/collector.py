@@ -171,9 +171,9 @@ class DouyinCollector:
                 return
             before = len(self.seen)
             await page.mouse.wheel(0, random.randint(800, 1500))
-            await asyncio.sleep(random.uniform(1.8, 3.2))
+            await asyncio.sleep(random.uniform(0.5, 1.0))
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(random.uniform(0.8, 1.6))
+            await asyncio.sleep(random.uniform(0.5, 1.0))
             if len(self.seen) == before:
                 no_new += 1
                 if no_new >= 3:
@@ -189,7 +189,7 @@ class DouyinCollector:
         log.info("采集对标账号主页: %s", url)
         page.on("response", self._on_response)
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         await self._scroll_until(
             page, stop=lambda: self.src_count >= self.max_per_source
         )
@@ -208,7 +208,7 @@ class DouyinCollector:
         url = f"https://www.douyin.com/search/{quote(kw)}?type=video"
         page.on("response", self._on_response)
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         await self._scroll_until(
             page, stop=lambda: self.src_count >= self.max_per_source
         )
@@ -253,7 +253,7 @@ class DouyinCollector:
 
             # ---- 登录检查 ----
             await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=60000)
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             cookies = await browser.cookies("https://www.douyin.com")
             logged_in = any(
                 c["name"] in ("sessionid", "sessionid_ss") and c["value"]
@@ -367,10 +367,10 @@ async def collect_comments(video_ids: list, out_dir: Path, max_per: int = 30):
             try:
                 await page.goto(f"https://www.douyin.com/video/{vid}",
                                 wait_until="domcontentloaded", timeout=60000)
-                await asyncio.sleep(3)
-                for _ in range(8):
+                await asyncio.sleep(2)
+                for _ in range(5):
                     await page.mouse.wheel(0, random.randint(800, 1500))
-                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    await asyncio.sleep(random.uniform(0.5, 1.0))
                     if len(comments) >= max_per:
                         break
             finally:
