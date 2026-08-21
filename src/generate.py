@@ -856,8 +856,14 @@ def main():
     # ---- LLM Judge：四维评分 + 镜头级定位 ----
     judge_scripts(scripts_by_track, card, analysis_map, api_key)
 
+    # 元信息兜底：LLM 未返回的脚本级字段补默认值
+    for lst in scripts_by_track.values():
+        for s in lst:
+            s.setdefault("字幕建议", "全程字幕+关键词花字")
+            s.setdefault("音效建议", "轻快BGM")
+
     write_json(d / "scripts.json", scripts_by_track)
-    write_xlsx(out, tracks, scripts_by_track, by_id)
+    write_xlsx(out, tracks, scripts_by_track, by_id, card)
 
     # 查重闸汇总
     all_text = "".join(
