@@ -49,6 +49,7 @@ def distill_one(video: dict, transcript: str, analysis: dict, api_key: str) -> d
         result["标题"] = video.get("desc", "")[:40]
         result["账号"] = video.get("author", "")
         result["对照"] = bool(video.get("对照"))
+        result["采集时间"] = video.get("create_time", 0)  # 模式时效管理用
         return result
     except Exception as e:
         log.error("[%s] 蒸馏失败: %s", video.get("aweme_id"), e)
@@ -137,13 +138,20 @@ def main():
 
     # ---- 模式归纳 ----
     cards = []
+    now = __import__("datetime").datetime.now()
     for f in cards_dir.glob("*.json"):
         c = read_json(f)
         if c:
+            ct = c.get("采集时间", 0) or 0
+            # 采集日期（YYYY-MM），用于时效判断
+            c_date = now.strftime("%Y-%m") if not ct else (
+                now - __import__("datetime").timedelta(
+                    days=(now.timestamp() - ct) / 86400)).strftime("%Y-%m")
             cards.append({
                 "video_id": c.get("video_id"),
                 "标题": c.get("标题", "")[:30],
                 "对照": c.get("对照", False),
+                "发布时间": c_date,
                 "钩子公式化": c.get("钩子公式化", ""),
                 "语气特征": c.get("语气特征", []),
                 "段落节奏": c.get("段落节奏", ""),
@@ -158,6 +166,7 @@ def main():
 【客户卖点】{'、'.join(card.get('卖点') or [])}
 
 注意：卡片中 `对照` 为 true 的是「同账号低互动对照组」——它们和爆款同人设同场景却没火。
+卡片中 `发布时间` 是视频采集月份——近 3 个月的模式权重更高（抖音风格迭代快），过旧（>18个月）的模式谨慎归纳。
 请把相似风格的视频归纳为 6~10 个"爆款模式"，并额外输出一组"爆款增量要素"（爆款 vs 对照的差异：
 对照组普遍缺什么钩子/节奏/情绪点，导致没火），只输出 JSON：
 {{"模式库":[
@@ -171,7 +180,8 @@ def main():
 ],
 "增量要素":["爆款相对对照普遍具备的要素1", "要素2", "..."]}}
 规则：模式之间要互斥（每条蒸馏卡只归入最像的一个模式）；句式骨架必须具体到能套用；
-对照组不单独成模式，只用于提炼增量要素；代表视频只填爆款（对照=false）的 video_id。
+对照组不单独成模式，只用于提炼增量要素；代表视频只填爆款（对照=false）的 video_id；
+归纳时优先依据发布时间较新的卡片，过旧卡片仅作参考不主导。
 
 蒸馏卡数据：{json.dumps(cards, ensure_ascii=False)}"""
     log.info("归纳爆款模式库...")

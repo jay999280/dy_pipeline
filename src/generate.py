@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import sys
+import threading
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -69,6 +70,31 @@ def parse_fewshot_xlsx(path: str) -> list:
     except Exception as e:
         log.warning("few-shot 解析失败（跳过）: %s", e)
     log.info("few-shot 解析到 %d 组人工脚本", len(examples))
+    return examples
+
+
+def load_human_fewshot(card: dict) -> list:
+    """加载人工改稿示例（data/<客户>/人工改稿/ 下的 xlsx/json），越用越贴合客户。
+
+    用户把改好的脚本放进该目录，下次生成自动参考（放最前、权重最高）。
+    """
+    base = DATA / str(card["客户"]).strip() / "人工改稿"
+    if not base.exists():
+        return []
+    examples = []
+    for f in sorted(base.glob("*.xlsx")):
+        examples.extend(parse_fewshot_xlsx(str(f)))
+    for f in sorted(base.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                examples.extend([d for d in data if isinstance(d, dict) and d.get("镜头")])
+            elif isinstance(data, dict) and data.get("镜头"):
+                examples.append(data)
+        except Exception:
+            pass
+    if examples:
+        log.info("人工改稿示例：%d 组（%s）", len(examples), base)
     return examples
 
 
@@ -426,17 +452,11 @@ def gen_captions(script: dict, card: dict, api_key: str) -> list:
 
 
 # ---------- LLM Judge：四维评分 + 镜头级定位 ----------
-def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_key: str) -> dict:
-    """四维评分（并发）+ 镜头级问题定位。"""
-    out = {}
-    items = [(tname, i, s) for tname, scripts in scripts_by_track.items()
-             for i, s in enumerate(scripts, 1)]
-
-    def _judge_one(item):
-        tname, i, s = item
-        ref = analysis_map.get(str(s.get("参考视频", "")), {})
-        hook_type = (ref.get("钩子设计") or {}).get("类型", "")
-        prompt = f"""你是短视频质量评审。下面是一条改编脚本，请按四维评分（每维 1-10 + 一句依据 + 问题镜头定位）。
+def judge_one(s: dict, analysis_map: dict, api_key: str) -> dict:
+    """单条脚本四维评审，返回评分 dict（含 _四维均分）。"""
+    ref = analysis_map.get(str(s.get("参考视频", "")), {})
+    hook_type = (ref.get("钩子设计") or {}).get("类型", "")
+    prompt = f"""你是短视频质量评审。下面是一条改编脚本，请按四维评分（每维 1-10 + 一句依据 + 问题镜头定位）。
 只输出 JSON：{{"对标匹配度":1到10,"对标依据":"一句话","原创度":1到10,"原创依据":"一句话","可执行性":1到10,"可执行依据":"一句话","红线合规":1到10,"红线依据":"一句话","问题镜头":[{{"镜头序号":数字,"问题":"钩子弱/台词拖沓/时长失衡/景别不当","建议":"一句话"}}]}}
 评分依据：
 - 对标匹配度：话题/论点顺序/钩子类型是否跟随对标（对标钩子类型：{hook_type}）
@@ -445,14 +465,25 @@ def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_ke
 - 红线合规：时长达标、无 20 字照抄、无绝对化用语、无事实编造、CTA 在位、钩子非平铺
 
 脚本：{json.dumps(s, ensure_ascii=False)}"""
-        try:
-            r = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.2)
-            r["_四维均分"] = round(
-                sum(float(r.get(k, 0) or 0) for k in ("对标匹配度", "原创度", "可执行性", "红线合规")) / 4, 1)
-            return tname, i, r
-        except Exception as e:
-            log.warning("[%s]#%d judge 失败: %s", tname, i, e)
-            return tname, i, None
+    try:
+        r = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.2)
+        r["_四维均分"] = round(
+            sum(float(r.get(k, 0) or 0) for k in ("对标匹配度", "原创度", "可执行性", "红线合规")) / 4, 1)
+        return r
+    except Exception as e:
+        log.warning("judge 失败: %s", e)
+        return {}
+
+
+def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_key: str) -> dict:
+    """四维评分（并发）+ 镜头级问题定位。"""
+    out = {}
+    items = [(tname, i, s) for tname, scripts in scripts_by_track.items()
+             for i, s in enumerate(scripts, 1)]
+
+    def _judge_one(item):
+        tname, i, s = item
+        return tname, i, judge_one(s, analysis_map, api_key)
 
     workers = max(1, min(4, len(items)))
     with cf.ThreadPoolExecutor(max_workers=workers) as ex:
@@ -463,6 +494,44 @@ def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_ke
                 scripts_by_track[tname][i - 1]["评审"] = r
                 out[f"{tname}#{i}"] = r
     return out
+
+
+def regen_lowscore(scripts_by_track: dict, card: dict, analysis_map: dict,
+                   api_key: str, threshold: float = 6.0):
+    """评审不达标（均分<阈值）的脚本：携带评审意见重生成一轮，仍低分标'需人工'。"""
+    for tname, scripts in scripts_by_track.items():
+        for i, s in enumerate(scripts):
+            r = s.get("评审") or {}
+            avg = r.get("_四维均分", 10.0)
+            if avg >= threshold:
+                continue
+            problems = json.dumps(r.get("问题镜头", []), ensure_ascii=False) or "整体质量偏低"
+            prompt = f"""你是短视频编导。下面这条脚本评审不达标（四维均分 {avg}），请根据评审意见重写修正。
+【评审意见】{problems}
+要求：保留选题与对标跟随（参考视频不变），只修正指出的问题；镜头结构可调整；表达仍要贴合客户人设；不得新增绝对化用语。
+只输出 JSON（与输入同结构）：{{"发布文案":"...","参考视频":"...","参考主题":"...","改编说明":"...","镜头":[{{"时间":"...","景别":"...","场景":"...","画面":"...","文案":"...","拍摄提示":"..."}}],"字幕建议":"...","音效建议":"..."}}
+
+原脚本：{json.dumps(s, ensure_ascii=False)}"""
+            try:
+                result = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.6)
+                new_s = result if result.get("镜头") else None
+                if not new_s:
+                    log.warning("[%s]#%d 重生成返回无效，保留原脚本", tname, i + 1)
+                    continue
+                new_s["参考视频"] = s.get("参考视频")
+                new_s["改编角度"] = s.get("改编角度")
+                new_s["标题候选"] = s.get("标题候选", [])
+                # 重新评审
+                r2 = judge_one(new_s, analysis_map, api_key)
+                new_s["评审"] = r2
+                scripts[i] = new_s
+                log.info("[%s]#%d 低分(%.1f)重生成完成，新均分 %.1f",
+                         tname, i + 1, avg, r2.get("_四维均分", 0))
+                if r2.get("_四维均分", 0) < threshold:
+                    new_s["评审"]["需人工"] = True
+                    log.warning("[%s]#%d 重生成仍低分，标记需人工", tname, i + 1)
+            except Exception as e:
+                log.warning("[%s]#%d 重生成失败: %s", tname, i + 1, e)
 
 
 def _similarity(a: str, b: str) -> float:
@@ -776,7 +845,9 @@ def main():
 
     fewshot_path = card.get("生成设置", {}).get("fewshot_脚本xlsx", "")
     examples = parse_fewshot_xlsx(fewshot_path)
-    fewshot_text = json.dumps(examples[:2], ensure_ascii=False, indent=2) if examples else "（无）"
+    # 人工改稿示例优先（最贴合客户本人风格）
+    human = load_human_fewshot(card)
+    fewshot_text = json.dumps((human + examples)[:3], ensure_ascii=False, indent=2) if (human + examples) else "（无）"
 
     n_per = int(card.get("生成设置", {}).get("每赛道脚本数", 5))
     if args.wave == "test":
@@ -793,8 +864,21 @@ def main():
     if args.force:
         scripts_by_track = {}  # 强制重新生成全部脚本
 
+    # 全局选题池（跨赛道避重）：初始注入已有脚本的选题 + topics.json 已用选题
+    global_used = set()
+    for lst in scripts_by_track.values():
+        for s in lst:
+            if s.get("改编角度"):
+                global_used.add(s["改编角度"])
+    topics_lib = read_json(d / "topics.json") or {}
+    for v in topics_lib.values():
+        if isinstance(v, list):
+            for tp in v:
+                global_used.add(str(tp))
+    _used_lock = threading.Lock()
+
     def _gen_track(t):
-        """并发生成一个赛道的全部脚本（赛道内串行保持选题去重）。"""
+        """并发生成一个赛道的全部脚本（跨赛道共享全局选题池避重）。"""
         tname = t.get("名称", "赛道")
         if tname in scripts_by_track:
             return tname, None, "已有脚本跳过"
@@ -808,13 +892,14 @@ def main():
         analysis_map = {a.get("video_id"): a for a in analysis}
         mode_lib = load_mode_lib(card)
         track_scripts = []
-        used_topics = []
         for idx in range(n_per):
             ref_vid = pool[idx % len(pool)]
             try:
+                with _used_lock:
+                    used_snapshot = list(global_used)
                 prompt = gen_prompt(t, card, ref_vid, by_id, analysis_map,
                                     transcripts, idx + 1, fewshot_text, mode_lib,
-                                    used_topics)
+                                    used_snapshot)
                 result = call_deepseek([{"role": "user", "content": prompt}],
                                        api_key, temperature=0.8)
                 # 兼容两种返回：{"脚本":[...]} 或 直接是单条脚本对象
@@ -828,7 +913,8 @@ def main():
                 script["参考视频"] = ref_vid
                 script["改编角度"] = script.get("参考主题", "")[:30] or f"改编自{ref_vid}"
                 track_scripts.append(script)
-                used_topics.append(script["改编角度"])
+                with _used_lock:
+                    global_used.add(script["改编角度"])
                 log.info("赛道[%s] 脚本%d 生成成功（参考 %s）", tname, idx + 1, ref_vid)
             except Exception as e:
                 log.error("赛道[%s] 脚本%d 生成失败: %s", tname, idx + 1, e)
@@ -894,8 +980,9 @@ def main():
             if caps:
                 scripts_by_track[tname][si]["标题候选"] = caps
 
-    # ---- LLM Judge：四维评分 + 镜头级定位 ----
+    # ---- LLM Judge：四维评分 + 镜头级定位 + 低分自动重生成 ----
     judge_scripts(scripts_by_track, card, analysis_map, api_key)
+    regen_lowscore(scripts_by_track, card, analysis_map, api_key)
 
     # 元信息兜底：LLM 未返回的脚本级字段补默认值
     for lst in scripts_by_track.values():

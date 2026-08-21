@@ -88,6 +88,18 @@ def main():
         sys.exit(0)
     stats = summarize(rows)
 
+    # ---- 钩子层归因：把每条脚本的钩子类型关联到发布数据 ----
+    analysis = read_json(d / "analysis.json") or {}
+    analysis_map = {a.get("video_id"): a for a in analysis.get("视频分析", [])}
+    hook_map = {}
+    for tname, scripts in scripts_by_track.items():
+        for i, s in enumerate(scripts, 1):
+            vid = str(s.get("参考视频", ""))
+            hook_type = (analysis_map.get(vid, {}).get("钩子设计") or {}).get("类型", "未知")
+            hook_map[f"{tname}#{i}"] = hook_type
+    for r in rows:
+        r["钩子类型"] = hook_map.get(f"{r.get('赛道','').strip()}#{r.get('脚本号','').strip()}", "未知")
+
     prompt = f"""你是短视频运营操盘手。客户试水期（约一个月）发布了多条脚本，以下是按赛道汇总的实测数据。
 
 【客户业务】{card.get('业务简介', '').strip()}
@@ -97,7 +109,7 @@ def main():
 【各赛道试水数据】
 {json.dumps(stats, ensure_ascii=False, indent=2)}
 
-【逐条原始数据】
+【逐条原始数据】（含钩子类型，用于归因什么钩子/选题有效）
 {json.dumps(rows, ensure_ascii=False, indent=2)}
 
 请输出复盘结论，只输出 JSON：
@@ -109,11 +121,13 @@ def main():
   ],
   "主攻赛道": "数据最好、最值得专攻的赛道名",
   "放弃赛道": ["建议停掉的赛道"],
+  "有效钩子": ["数据验证过表现好的钩子类型（对照逐条的钩子类型与播放/互动数据），如'痛点型'、'悬念型'"],
   "人设标签提炼": ["从数据反馈中提炼出的客户人设新标签，如'靠谱直说'、'现场实测'"],
   "卖点强化": ["数据验证过的卖点，后续脚本应强化"],
   "需求卡更新建议": "如何更新客户画像/关键词/排除规则（一段话）"
 }}
-注意：播放量看均值而非总量；咨询线索是最硬指标（直接转化）；互动率=点赞/播放。"""
+注意：播放量看均值而非总量；咨询线索是最硬指标（直接转化）；互动率=点赞/播放；
+钩子归因：把播放/互动表现好的条目按钩子类型分组，得出哪些钩子有效、哪些无效。"""
 
     result = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.3)
     write_json(d / "赛道复盘.json", result)
@@ -139,6 +153,9 @@ def main():
         lines.append(f"- 优化：{t.get('优化建议')}")
     lines.append(f"\n## 主攻赛道：**{result.get('主攻赛道', '?')}**")
     lines.append(f"放弃赛道：{'、'.join(result.get('放弃赛道') or [])}")
+    lines.append("\n## 有效钩子（数据验证过）")
+    for h in result.get("有效钩子", []):
+        lines.append(f"- {h}")
     lines.append("\n## 人设标签提炼")
     for tag in result.get("人设标签提炼", []):
         lines.append(f"- {tag}")

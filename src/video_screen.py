@@ -14,7 +14,7 @@ from pathlib import Path
 
 from analyze import call_deepseek, get_api_key
 from collector import DouyinCollector
-from common import load_card, read_json, run_dir, setup_log, write_json
+from common import DATA, load_card, read_json, run_dir, setup_log, write_json
 from account_screen import customer_profile_block, suggest_keywords
 
 log = logging.getLogger(__name__)
@@ -63,6 +63,38 @@ def quantitative_prescreen(videos: list, by_author: dict, card: dict) -> list:
 
 
 # ---------- 第二层：AI 五维匹配度（1-10 分 + 依据） ----------
+def save_preference(d: Path, picked: list, card: dict):
+    """把人工选中视频的特征沉淀为客户偏好档案（供下次 ai_score 参考，越用越懂口味）。"""
+    pref_file = DATA / str(card["客户"]).strip() / "偏好档案.json"
+    real = [v for v in picked if not v.get("对照")]
+    if not real:
+        return
+    authors = {}
+    for v in real:
+        a = v.get("author", "")
+        authors[a] = authors.get(a, 0) + 1
+    top_authors = [a for a, _ in sorted(authors.items(), key=lambda x: -x[1])[:5]]
+    profile = {
+        "客户": card.get("客户"),
+        "更新时间": datetime.datetime.now().isoformat(timespec="seconds"),
+        "高频账号": top_authors,
+        "选中视频数": len(real),
+    }
+    pref_file.parent.mkdir(parents=True, exist_ok=True)
+    pref_file.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info("偏好档案已更新: %s（客户认可账号 %d 个）", pref_file, len(top_authors))
+
+
+def _pref_block(card: dict) -> str:
+    """客户历史偏好（人工选中账号）渲染成 prompt 段。"""
+    pref = read_json(DATA / str(card["客户"]).strip() / "偏好档案.json")
+    if not pref or not pref.get("高频账号"):
+        return ""
+    return ("【客户历史偏好】客户历次人工选中的对标账号："
+            + "、".join(pref["高频账号"])
+            + "——这些账号的内容风格客户认可，评分时适当参考（不强制）")
+
+
 def ai_score(videos: list, card: dict, api_key: str) -> list:
     """五维匹配度：定位契合/受众重合/场景可复现/人设相似/改编潜力，各 1-10 + 依据 + 加权综合。"""
     rows = [
@@ -81,6 +113,7 @@ def ai_score(videos: list, card: dict, api_key: str) -> list:
 【客户人设】{card.get('人设', '')}
 【目标客户】{card.get('目标客户', '')}
 【排除规则】{card.get('排除规则', '')}
+{_pref_block(card)}
 
 请给每条视频做五维匹配度评分（每维 1-10 分 + 一句依据），只输出 JSON：
 {{"视频":[
@@ -218,6 +251,7 @@ def main():
             "视频": picked,
         }
         write_json(d / "selected_candidates.json", summary)
+        save_preference(d, picked, card)
         log.info("已确认 %d 条视频，selected_candidates.json 已生成", len(picked))
         return
 
