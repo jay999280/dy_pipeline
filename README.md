@@ -1,87 +1,108 @@
-# 抖音对标视频 → 脚本批量生成流水线
+# dy_pipeline — 抖音对标视频 → 脚本批量生成流水线
 
-从对标账号/关键词采集抖音爆款视频 → ASR 逐字稿 → DeepSeek 结构化拆解 → 赛道聚类 → 按赛道批量生成脚本（Excel 输出）。
+从抖音「像人一样刷视频找对标」，到批量产出**可直接开拍**的脚本池 Excel。一条命令跑完：找对标 → 看懂视频（转写+视觉）→ 拆解爆款逻辑 → 聚类赛道 → 批量生成脚本 → 自动质量评审。
 
-## 目录结构
+## 功能特性
+
+- **搜索驱动找对标**：按关键词滚动刷视频（像人一样刷），量化预筛（爆款系数/互动率/评论赞比/发布时间）+ AI 五维匹配度分析，一轮人工确认
+- **真正"看懂"视频**：ASR 转写带时间戳（本地 faster-whisper / 豆包 ASR）+ GLM 视觉模型看帧，输出真实分镜表（景别/画面内容/画面文字）
+- **评论区挖掘**：采集爆款视频评论，提取受众痛点词/争议点/真实语言
+- **四维爆款拆解**：钩子设计（前3秒）/ 叙事节奏（带时间轴）/ 情绪共鸣点（带触发秒）/ 结尾互动引导
+- **对标改编生成**：1:1 内容跟随改编，保话题保论点换客户语境；分镜表含景别/拍摄提示/字幕音效建议/改编说明
+- **自动质量闸**：合规扫描（广告法绝对化用语）、卖点覆盖率、脚本间查重（rapidfuzz）、结构同质化检查、LLM Judge 四维评分（低分自动重生成）
+- **越用越贴合客户**：人工改稿自动回写 fewshot、你选视频的偏好沉淀、客户标签/人设档案约束生成
+- **测试波-量产波**：`--wave test` 每赛道先出 1 条快速验证方向，复盘后再量产
+- **成本可控**：LLM 同 prompt 磁盘缓存，重跑零计费；视觉默认 glm-4v-flash 免费档
+
+## 工作流程
 
 ```
-dy_pipeline/
-├── config/
-│   ├── 需求卡模板.yaml          # 每次运行的需求卡模板
-│   └── 示例_需求卡.yaml          # 示例需求卡
-├── src/
-│   ├── common.py               # 路径、日志、工具函数
-│   ├── collector.py            # ① 采集：Playwright 接口拦截（登录态复用、验证码暂停、SSR 兜底）
-│   ├── transcribe.py           # ② 转写：下载视频 → ASR 逐字稿（转完即删视频）
-│   ├── analyze.py              # ③ 分析：DeepSeek 结构化拆解爆款
-│   ├── cluster.py              # ④ 聚类：赛道划分
-│   ├── generate.py             # ⑤ 生成：脚本批量生成 → xlsx（few-shot + 查重闸）
-│   └── run.py                  # 总入口，按需求卡跑全流程
-├── tests/                      # 单元测试（采集解析/few-shot解析/xlsx输出/查重）
-└── data/                       # 运行产物 + 浏览器登录态 + whisper 模型
+run.py 全流程：
+video_screen(搜索驱动找对标) → transcribe(转写+抽帧) → vision(视觉看帧)
+  → comments(评论挖掘) → analyze(四维拆解) → cluster(聚类+选题库)
+  → distill(模式蒸馏) → generate(批量生成+评审+脚本池xlsx)
+可选：account_screen(账号深挖模式) | collect_more(语料扩充) | feedback(试水复盘)
+```
+
+## 环境要求
+
+- Python 3.10+（推荐 3.13/3.14）
+- ffmpeg（视频抽音频/抽帧）
+- 一个 OpenAI 兼容的 LLM API（文本+视觉，默认智谱 glm-4-flash / glm-4v-flash，均有免费档）
+- Chrome 浏览器（采集用 Playwright 挂载，需先 `playwright install chrome`）
+
+## 安装
+
+```bash
+git clone https://github.com/jay999280/dy_pipeline.git
+cd dy_pipeline
+pip install -r requirements.txt
+playwright install chrome
+```
+
+配置环境变量：
+
+```bash
+export LLM_API_KEY=你的key          # 文本 LLM
+export LLM_API_BASE=https://open.bigmodel.cn/api/paas/v4   # 智谱默认
+export LLM_MODEL=glm-4-flash
+# 可选：豆包 ASR（转写提速几十倍）
+# export VOLC_ASR_APPID=...
+# export VOLC_ASR_ACCESS_TOKEN=...
 ```
 
 ## 快速开始
 
-```powershell
-cd ~\Desktop\dy_pipeline
-pip install -r requirements.txt
+```bash
+# 1. 建需求卡：复制 config/需求卡模板.yaml 或 config/示例_需求卡.yaml
+cp config/需求卡模板.yaml config/我的客户_需求卡.yaml
 
-# 1) 配置 DeepSeek API Key（分析/生成阶段需要，新开终端执行后生效）
-setx DEEPSEEK_API_KEY "sk-你的key"
+# 2. 查看/跑全流程（首次运行会弹 Chrome，扫码登录抖音一次）
+python src/run.py config/我的客户_需求卡.yaml
 
-# 2) 完整运行：按需求卡执行全部阶段
-python src\run.py config\示例_需求卡.yaml
+# 3. 分阶段跑 / 查看进度 / 强制重跑
+python src/run.py config/我的客户_需求卡.yaml --only video_screen
+python src/run.py config/我的客户_需求卡.yaml --status
+python src/generate.py config/我的客户_需求卡.yaml --resume --force
 ```
 
-### 首次运行注意事项（实战验证过）
+### 人工门禁
 
-1. **扫码登录**：采集阶段会打开 Chrome 窗口，用抖音 App 扫码一次。登录态保存在 `data\browser_profile`，之后自动复用。
-2. **验证码**：采集滚动时抖音可能弹滑块验证码，**人工滑一下**，程序会等 20 秒继续。
-3. **whisper 模型**：已预下载到 `data\models\faster-whisper-small`（model.bin + tokenizer.json + vocabulary.txt + config.json），无需再下载。注意该仓库**没有** `vocabulary.json`/`preprocessor_config.json`，不要按这两个名字去下载。
-4. **转写引擎**：默认用本地 whisper（CPU，约 1.7 倍速）。配置 `VOLC_ASR_APPID` + `VOLC_ASR_ACCESS_TOKEN` 后自动切换豆包语音识别（快几十倍）。
+筛选阶段跑完会以退出码 2 结束，并把候选清单写成 Markdown。把选中的视频 `video_id` 填入 `selected_candidates.json` 后重跑即可继续。也可用 `account_screen` 进入"先选账号再深挖"模式。
 
-## 运行方式
+### 交付物
 
-每次运行 = 一份需求卡（YAML），描述一个客户的业务、对标账号、关键词和本次预算：
+脚本池 `脚本池.xlsx` 含：每赛道一个 sheet（对标链接｜发布文案｜分镜表｜口播文案）、拍摄执行 sheet（按场景聚合镜头+道具清单）、发布文案候选、judge 评审得分。
 
-```powershell
-python src\run.py config\示例_需求卡.yaml            # 新任务：全部阶段
-python src\run.py config\示例_需求卡.yaml --resume   # 继续上次，完成的阶段自动跳过
-python src\run.py config\示例_需求卡.yaml --only analyze   # 只跑某阶段
-python src\run.py config\示例_需求卡.yaml --only collector --force  # 重采
+## 目录结构
+
+```
+├── config/            # 需求卡模板 + 示例需求卡
+├── src/
+│   ├── run.py         # 总入口（阶段链/--status/--only/--resume）
+│   ├── collector.py   # Playwright 接口拦截采集（登录态复用/验证码暂停/SSR兜底）
+│   ├── video_screen.py# 搜索驱动找对标：量化预筛 + 五维匹配度
+│   ├── transcribe.py  # 下载→ASR 带时间戳转写→抽帧→删视频
+│   ├── vision.py      # GLM 视觉看帧 → 真实分镜表
+│   ├── comments.py    # 评论区采集
+│   ├── analyze.py     # 四维爆款拆解（LLM 缓存）
+│   ├── cluster.py     # 赛道聚类 + 选题库
+│   ├── distill.py     # 风格蒸馏 → 爆款模式库
+│   └── generate.py    # 对标改编生成 + 质量闸 + 脚本池 xlsx
+├── tests/             # pytest 单元测试
+└── AGENTS.md          # Codex/Claude Code 等 AI 助手的作业手册
 ```
 
-各阶段可单独运行（默认复用上次运行目录，`--fresh` 新建）：
+## 测试
 
-```powershell
-python src\collector.py config\示例_需求卡.yaml
-python src\transcribe.py config\示例_需求卡.yaml --limit 2   # 先试转 2 条
-python src\analyze.py config\示例_需求卡.yaml
-python src\cluster.py config\示例_需求卡.yaml
-python src\generate.py config\示例_需求卡.yaml
+```bash
+python -m pytest tests/ -q
 ```
 
-## 各阶段产物（`data/<客户>/<run>/`）
+## 免责声明
 
-| 阶段 | 产物 |
-|---|---|
-| collector | `candidates.json`（标题/账号/点赞/评论/播放地址）+ `candidates.debug_urls.txt`（诊断） |
-| transcribe | `transcripts/<video_id>.txt`（完整逐字稿，视频转完即删） |
-| analyze | `analysis.json`（每条视频的 hook/结构拆解/爆点归因/可复用模板） |
-| cluster | `tracks.json`（赛道框架） |
-| generate | `脚本池.xlsx`（对标链接｜发布文案｜画面｜文案）+ `scripts.json` |
+本项目仅用于内容创作学习与研究。采集的抖音数据版权归原平台及创作者所有；请遵守平台规则与当地法律法规，勿将采集能力用于侵权、滥用或干扰平台正常运营。使用本项目产生的一切后果由使用者自行承担。
 
-## 需求卡字段说明
+## 许可证
 
-- `对标账号`：抖音主页链接（douyin.com/user/... 或分享短链），采该账号作品；留空则只按关键词采
-- `关键词`：抖音站内搜索词
-- `采集设置`：每个来源最多视频数 / 最低点赞（低于仅保留不推荐）/ 滚动上限
-- `生成设置`：赛道数 / 每赛道脚本数 / `fewshot_脚本xlsx`（已有的人工脚本 Excel，教模型学格式和语气）
-- `转写设置`：`引擎: auto`（有豆包密钥用豆包，否则本地 whisper）
-
-## 质量红线（生成层内置）
-
-1. 只借结构不抄句子：查重闸比对参考逐字稿，10 字以上整句照搬会打警告
-2. 数字/尺寸/价格/材料承诺强制留白，人工核对后再发布
-3. 产品植入放解决方案段，前 3 秒必须有钩子
+[MIT](LICENSE) © 2026 jay999280
