@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 def parse_fewshot_xlsx(path: str) -> list:
     """解析已有脚本 Excel：发布文案 + 逐镜头(画面/文案)。
 
-    真实格式（示例脚本）：R0 对标链接；R1 发布文案+正文；
+    真实格式（人工脚本示例）：R0 对标链接；R1 发布文案+正文；
     R2 画面/文案表头（文案列=ti，画面数据在 ti 左侧一列）；
     数据行画面为空的行是上一镜头的文案续行。
     """
@@ -108,29 +108,52 @@ def _hard_trim(s: dict, cap: int) -> bool:
 
 
 # 平铺开场检测：自我介绍式开头 或 无任何强钩子信号 → 视为弱钩子
-_FLAT_OPENERS = ("大家好", "大家好我是", "我是老王", "我是杭州", "今天来给大家",
-                 "今天给大家", "别担心", "今天示例", "嗨", "hello", "哈喽", "hi",
-                 "第一步", "首先", "在杭州，橱柜定制不仅要")
+# 注意：客户专属平铺开场词已迁入需求卡"平铺开场黑名单"字段，
+# 这里只保留通用兜底；fix_hooks 会把需求卡里的词并入。
+_FLAT_OPENERS = ("大家好", "大家好我是", "今天来给大家", "今天给大家",
+                 "别担心", "嗨", "hello", "哈喽", "hi", "第一步", "首先")
 _STRONG_SIGNALS = ("？", "！", "!", "?", "别", "坑", "骗", "后悔", "秘密", "真相",
                    "担心", "千万别", "一定要", "省钱", "上当", "吃亏", "竟然",
                    "知道吗", "为什么", "怎么", "你家的", "你是不是")
 
+# 通用 CTA 兜底（客户可在需求卡 生成设置.CTA选项库 覆盖）
+_DEFAULT_CTA = (
+    "私信我，免费上门测量，先量再定方案",
+    "评论区扣1，我发你本地实拍案例",
+    "来展厅实地看，材质工艺随便验",
+    "点关注，下期讲X",
+    "收藏备用，装修时用得上",
+)
 
-def _is_weak_hook(text: str) -> bool:
-    if any(text.startswith(p) for p in _FLAT_OPENERS):
+
+def _flat_openers(card: dict) -> tuple:
+    """通用平铺开场黑名单 + 需求卡自定义黑名单。"""
+    extra = tuple(str(x).strip() for x in (card.get("平铺开场黑名单") or []) if str(x).strip())
+    return extra + _FLAT_OPENERS
+
+
+def _cta_lib(card: dict) -> list:
+    """CTA 选项库：需求卡优先，缺省用通用兜底。"""
+    lib = card.get("生成设置", {}).get("CTA选项库") or []
+    return [str(x) for x in lib if str(x).strip()] or list(_DEFAULT_CTA)
+
+
+def _is_weak_hook(text: str, flat_openers=_FLAT_OPENERS) -> bool:
+    if any(text.startswith(p) for p in flat_openers):
         return True
     return not any(w in text for w in _STRONG_SIGNALS)
 
 
 def fix_hooks(scripts_by_track: dict, analysis_map: dict, card: dict, api_key: str):
     """钩子兜底：首镜头是平铺开场时，按参考视频的钩子类型重写。"""
+    openers = _flat_openers(card)
     for tname, scripts in scripts_by_track.items():
         for i, s in enumerate(scripts, 1):
             shots = s.get("镜头", [])
             if not shots:
                 continue
             first = str(shots[0].get("文案", "")).strip()
-            if not _is_weak_hook(first):
+            if not _is_weak_hook(first, openers):
                 continue
             ref = analysis_map.get(str(s.get("参考视频", "")), {})
             hook = ref.get("hook") or {}
@@ -250,6 +273,7 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
     a = analysis_map.get(ref_vid, {})
     transcript = transcripts.get(ref_vid, "")
     hook = a.get("hook") or {}
+    cta_lines = "\n".join(f'- "{c}"' for c in _cta_lib(card))
     return f"""你是抖音短视频编导。任务：把下面这一条【对标视频】**内容跟随式改编**成一条 {lo}~{hi} 秒的【客户】脚本（本赛道第 {script_no} 条）。
 
 【客户业务】{card.get('业务简介', '').strip()}
@@ -285,11 +309,7 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
 7. 时长 {lo}~{hi} 秒：文案总量 {lo*4}~{hi*4} 字，5~8 个镜头，每镜头带"时间"字段（如"0-5s"），时间段连续覆盖
 
 【CTA 选项库】（结尾从中选一种，结合客户卖点）
-- "私信我，免费上门测量，先量再定方案"
-- "评论区扣1，我发你杭州本地实拍案例"
-- "来展厅实地看，材质工艺随便验"
-- "点关注，下期讲X"
-- "收藏备用，装修橱柜时用得上"
+{cta_lines}
 
 【客户已验证脚本风格示例】
 {fewshot}

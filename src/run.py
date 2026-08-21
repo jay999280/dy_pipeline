@@ -21,7 +21,9 @@ from common import load_card, read_json, run_dir, stage_done, setup_log
 
 SRC = Path(__file__).resolve().parent
 
-STAGES = ["account_screen", "video_screen", "transcribe", "analyze", "cluster", "generate"]
+STAGES = ["account_screen", "video_screen", "transcribe", "analyze", "cluster", "distill", "generate"]
+# 不进默认链、但可通过 --only 单独跑的阶段（周期性/可选任务）
+OPTIONAL = ["feedback", "collect_more"]
 
 
 def stage_output(d: Path, stage: str) -> Path:
@@ -31,11 +33,15 @@ def stage_output(d: Path, stage: str) -> Path:
         "transcribe": d / "transcripts",                   # 目录，非空即视为完成
         "analyze": d / "analysis.json",
         "cluster": d / "tracks.json",
+        "distill": d.parent / "distill" / "模式库.json",   # 客户级知识资产，跨 run 复用
         "generate": d / "脚本池.xlsx",
+        "feedback": d / "赛道复盘报告.md",
     }[stage]
 
 
 def is_done(d: Path, stage: str) -> bool:
+    if stage == "feedback":
+        return False  # 周期性任务，有新数据就重跑
     out = stage_output(d, stage)
     if stage in ("account_screen", "video_screen"):
         data = read_json(out) or []
@@ -76,7 +82,7 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("card")
-    ap.add_argument("--only", choices=STAGES, help="只跑指定阶段")
+    ap.add_argument("--only", choices=STAGES + OPTIONAL, help="只跑指定阶段")
     ap.add_argument("--resume", action="store_true", help="沿用上一次运行目录")
     ap.add_argument("--force", action="store_true", help="重跑 collector/generate")
     args = ap.parse_args()
