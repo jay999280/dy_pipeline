@@ -15,7 +15,7 @@ from pathlib import Path
 from analyze import call_deepseek, get_api_key
 from collector import DouyinCollector
 from common import load_card, read_json, run_dir, setup_log, write_json
-from account_screen import customer_profile_block
+from account_screen import customer_profile_block, suggest_keywords
 
 log = logging.getLogger(__name__)
 
@@ -221,11 +221,53 @@ def main():
         log.info("已确认 %d 条视频，selected_candidates.json 已生成", len(picked))
         return
 
-    # ---- 未确认：采集已选账号主页 → 量化预筛 → AI 打分 → 输出清单 ----
+    # ---- 未确认：搜索驱动模式（像人刷视频）或账号模式 ----
     accounts = read_json(d / "accounts_selected.json")
     if not accounts:
-        sys.exit("accounts_selected.json 为空，请先完成第一轮账号筛选")
+        # 搜索驱动模式：不强制先选账号，直接按关键词不断刷爆款视频，逐条评估后人工选视频
+        log.info("无已确认账号 → 搜索驱动模式：按关键词像人一样刷爆款视频")
+        api_key = get_api_key()
+        if not api_key:
+            sys.exit("缺少 LLM_API_KEY / DEEPSEEK_API_KEY 环境变量")
+        cs = card.get("采集设置") or {}
+        search_card = dict(card)
+        search_card["对标账号"] = []
+        search_card["关键词"] = card.get("关键词") or []
+        search_card["采集设置"] = dict(cs)
+        search_card["采集设置"]["每个来源最多视频数"] = int(cs.get("搜索刷视频每关键词上限", 50))
+        search_card["采集设置"]["滚动上限"] = int(cs.get("搜索刷视频滚动上限", 30))
+        kws = search_card["关键词"]
+        if not kws:
+            sys.exit("搜索驱动模式需要需求卡 关键词 非空")
+        log.info("搜索刷视频：%d 个关键词，每关键词滚动上限 %d",
+                 len(kws), search_card["采集设置"]["滚动上限"])
+        search = asyncio.run(DouyinCollector(search_card).run(d / "candidates.json"))
+        videos = search.get("视频", [])
+        if not videos:
+            log.warning("搜索没有采到视频（检查关键词或登录态）")
+            sys.exit(2)
+        # 量化预筛 + AI 五维打分（同账号视频少时爆款系数仅供参考）
+        by_author = {}
+        for v in videos:
+            by_author.setdefault(v.get("author", ""), []).append(v)
+        candidates = quantitative_prescreen(videos, by_author, card)
+        candidates = [v for v in candidates if not v.get("预筛否决")]
+        candidates = ai_score(candidates, card, api_key)
+        # 关键词滚雪球：从刷到的视频标题提炼补充关键词（人工采纳后填回需求卡二轮刷）
+        kw_file = d / "关键词建议.txt"
+        if not kw_file.exists():
+            sugg = suggest_keywords(search, card, api_key)
+            if sugg:
+                kw_file.write_text("补充关键词建议（可填回需求卡 关键词 字段后二轮刷视频）：\n"
+                                   + "\n".join(f"- {k}" for k in sugg), encoding="utf-8")
+                log.info("关键词建议已生成: %s（%d 个）", kw_file.name, len(sugg))
+        write_md(d / "爆款视频候选清单.md", candidates, card)
+        write_json(sel_file, [])
+        log.info("== 视频筛选（搜索驱动）==")
+        log.info("请查看 爆款视频候选清单.md，把要拆解的 video_id 写入 videos_selected.json，再重跑")
+        sys.exit(2)
 
+    # 账号模式：已确认账号 → 主页作品深挖
     api_key = get_api_key()
     if not api_key:
         sys.exit("缺少 LLM_API_KEY / DEEPSEEK_API_KEY 环境变量")

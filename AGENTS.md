@@ -13,12 +13,14 @@
 ## 流程速览（9 阶段 + 可选）
 
 ```
-run.py 全流程：account_screen → video_screen → transcribe → vision → comments
-             → analyze → cluster → distill → generate
-可选：feedback（试水复盘）| collect_more（语料扩充）
+run.py 全流程：video_screen（搜索驱动：按关键词像人刷视频选爆款）→ transcribe → vision
+             → comments → analyze → cluster → distill → generate
+可选：account_screen（账号深挖模式，先选账号再挖主页）| feedback（试水复盘）| collect_more（语料扩充）
 ```
 
-两轮人工门禁在 account_screen / video_screen 后，退出码 2 = 等用户确认。
+默认是**搜索驱动**：video_screen 无已确认账号时，直接按需求卡关键词滚动刷视频（每关键词上限 50 条/滚动 30 次），量化预筛 + AI 五维匹配度后，一轮人工门禁选视频。想用"先选账号再挖主页"的老模式，先 `--only account_screen` 选好账号即可自动切回。
+
+人工门禁在 video_screen 后，退出码 2 = 等用户确认。
 
 ## 命令速查（全部在仓库根目录执行）
 

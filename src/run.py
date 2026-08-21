@@ -21,9 +21,9 @@ from common import load_card, read_json, run_dir, stage_done, setup_log
 
 SRC = Path(__file__).resolve().parent
 
-STAGES = ["account_screen", "video_screen", "transcribe", "vision", "comments", "analyze", "cluster", "distill", "generate"]
-# 不进默认链、但可通过 --only 单独跑的阶段（周期性/可选任务）
-OPTIONAL = ["feedback", "collect_more"]
+STAGES = ["video_screen", "transcribe", "vision", "comments", "analyze", "cluster", "distill", "generate"]
+# 不进默认链、但可通过 --only 单独跑的阶段（账号深挖模式/周期性任务/可选）
+OPTIONAL = ["account_screen", "feedback", "collect_more"]
 
 
 def stage_output(d: Path, stage: str) -> Path:
