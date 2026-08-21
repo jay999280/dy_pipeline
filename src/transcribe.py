@@ -27,15 +27,25 @@ ASR_SUBMIT = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit"
 ASR_QUERY = "https://openspeech.bytedance.com/api/v3/auc/bigmodel/query"
 
 
-def download_video(url: str, out_mp4: Path):
-    """带抖音 referer 下载视频文件。"""
+def download_video(url: str, out_mp4: Path, retries: int = 2):
+    """带抖音 referer 下载视频文件，失败重试（URL 过期/网络抖动）。"""
     headers = {"User-Agent": UA, "Referer": "https://www.douyin.com/"}
-    with requests.get(url, headers=headers, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with open(out_mp4, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1 << 16):
-                f.write(chunk)
-    log.info("已下载 %s (%.1f MB)", out_mp4.name, out_mp4.stat().st_size / 1e6)
+    last_err = None
+    for attempt in range(retries):
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=120) as r:
+                r.raise_for_status()
+                with open(out_mp4, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1 << 16):
+                        f.write(chunk)
+            log.info("已下载 %s (%.1f MB)", out_mp4.name, out_mp4.stat().st_size / 1e6)
+            return
+        except Exception as e:
+            last_err = e
+            log.warning("下载失败(第%d次): %s", attempt + 1, e)
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"视频下载失败（播放地址可能过期，需重新采集刷新）: {last_err}")
 
 
 def extract_audio(mp4: Path, wav: Path):

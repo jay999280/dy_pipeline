@@ -57,6 +57,25 @@ def customer_profile_block(card: dict) -> str:
     )
 
 
+def suggest_keywords(summary: dict, card: dict, api_key: str) -> list:
+    """关键词滚雪球：从首轮采集的视频标题提炼行业长尾关键词（扩充搜索素材池）。"""
+    titles = [v.get("desc", "")[:40] for v in summary.get("视频", [])[:30] if v.get("desc")]
+    if not titles:
+        return []
+    prompt = f"""你是抖音关键词研究员。客户业务：{card.get('业务简介', '').strip()}。
+以下是首轮搜索采集到的视频标题，请从中提炼 8~12 个行业长尾关键词（用于补充抖音搜索，扩大素材池）。
+要求：长尾、具体、与客户业务强相关，避开过于宽泛的大词；只输出 JSON：{{"关键词":["kw1","kw2",...]}}
+
+标题列表：
+{chr(10).join(titles)}"""
+    try:
+        result = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.3)
+        return result.get("关键词", [])
+    except Exception as e:
+        log.warning("关键词建议生成失败: %s", e)
+        return []
+
+
 def ai_profile(accounts: list, card: dict, api_key: str) -> list:
     """AI 给每个账号画像打分：垂直度/爆款力/业务相关度/场景适配度/人设匹配度。"""
     rows = [
@@ -165,6 +184,14 @@ def main():
         summary = asyncio.run(DouyinCollector(search_card).run(search_file))
     accounts = aggregate_authors(summary)
     log.info("搜索聚合出 %d 个候选账号", len(accounts))
+    # 关键词滚雪球：从标题提炼补充关键词建议（人工采纳后填回需求卡二轮采集）
+    kw_file = d / "关键词建议.txt"
+    if not kw_file.exists():
+        sugg = suggest_keywords(summary, card, api_key)
+        if sugg:
+            kw_file.write_text("补充关键词建议（可填回需求卡 关键词 字段后二轮采集）：\n"
+                               + "\n".join(f"- {k}" for k in sugg), encoding="utf-8")
+            log.info("关键词建议已生成: %s（%d 个）", kw_file.name, len(sugg))
     if not accounts:
         log.warning("没有聚合到候选账号，检查关键词或登录态")
         write_json(d / "accounts_selected.json", [])

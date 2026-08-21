@@ -253,6 +253,8 @@ def build_ref_pool(track: dict, analysis: list, by_id: dict, tdir: Path, n_per: 
         vid = a.get("video_id")
         if not vid or vid not in by_id:
             continue
+        if by_id[vid].get("对照"):
+            continue  # 对照组不作改编参考
         tf = tdir / f"{vid}.txt"
         if not tf.exists() or len(tf.read_text(encoding="utf-8").strip()) < 100:
             continue
@@ -271,12 +273,13 @@ def build_ref_pool(track: dict, analysis: list, by_id: dict, tdir: Path, n_per: 
 
 def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
                analysis_map: dict, transcripts: dict, script_no: int,
-               fewshot: str, mode_lib: str = "") -> str:
+               fewshot: str, mode_lib: str = "", used_topics: list = None) -> str:
     """1:1 内容跟随改编：话题/论点/论证方式跟随对标视频，只替换客户特有信息。"""
     lo, hi = parse_duration(card)
     v = by_id.get(ref_vid, {})
     a = analysis_map.get(ref_vid, {})
     transcript = transcripts.get(ref_vid, "")
+    used_block = "\n".join(f"- {t}" for t in (used_topics or [])) or "（尚无，本条可自由选题）"
     hook = a.get("钩子设计") or {}
     rhythm = a.get("叙事结构与节奏") or {}
     emotion = a.get("情绪共鸣点") or []
@@ -294,6 +297,9 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
 定位:{track.get('定位')}
 常见结构:{track.get('常见结构')}
 可拍场景:{track.get('可拍场景')}
+
+【本赛道已用选题（本条必须讲不同侧面，避免同赛道脚本重复）】
+{used_block}
 
 【对标视频】（唯一改编对象）
 标题：{v.get('desc', '')}
@@ -501,6 +507,56 @@ def sheet_name(name: str) -> str:
     return (name or "赛道")[:31]
 
 
+def make_shooting_sheet(wb, scripts_by_track: dict, card: dict):
+    """拍摄执行 sheet：按需求卡可拍摄场景聚合镜头数 + 道具/口播提示清单。"""
+    ws = wb.create_sheet("拍摄执行")
+    scenes = (card.get("客户画像") or {}).get("可拍摄场景") or []
+    all_shots = []
+    for tname, scripts in scripts_by_track.items():
+        for si, s in enumerate(scripts, 1):
+            for shot in s.get("镜头", []):
+                all_shots.append({"脚本": f"{tname}#{si}", **shot})
+
+    # 按场景归类（画面+拍摄提示 匹配场景关键词）
+    scene_map = {sc: [] for sc in scenes}
+    other = []
+    for sh in all_shots:
+        txt = str(sh.get("画面", "")) + str(sh.get("拍摄提示", ""))
+        matched = next((sc for sc in scenes
+                        if any(k and k in txt for k in str(sc).split("/"))), None)
+        (scene_map[matched] if matched else other).append(sh)
+
+    ws.cell(1, 1, "拍摄执行包（按场景聚合，同场景镜头可集中一天拍完）").font = _FONT_BOLD
+    for ci, h in enumerate(["场景", "镜头数", "涉及脚本"], 1):
+        ws.cell(2, ci, h).font = _FONT_BOLD
+    r = 3
+    for sc, shots in scene_map.items():
+        if not shots:
+            continue
+        ws.cell(r, 1, sc)
+        ws.cell(r, 2, len(shots))
+        ws.cell(r, 3, "、".join(sorted({sh["脚本"] for sh in shots})))
+        r += 1
+    if other:
+        ws.cell(r, 1, "其他/未归类")
+        ws.cell(r, 2, len(other))
+        ws.cell(r, 3, "、".join(sorted({sh["脚本"] for sh in other})))
+        r += 1
+
+    # 道具/口播提示清单（去重）
+    r += 1
+    ws.cell(r, 1, "道具与口播提示（跨脚本去重）").font = _FONT_BOLD
+    r += 1
+    tips = sorted({str(sh.get("拍摄提示", "")).strip()
+                   for sh in all_shots if str(sh.get("拍摄提示", "")).strip()})
+    for i, t in enumerate(tips, 1):
+        ws.cell(r, 1, i)
+        ws.cell(r, 2, t)
+        r += 1
+    for col, w in {"A": 30, "B": 12, "C": 46}.items():
+        ws.column_dimensions[col].width = w
+
+
 # ---------- xlsx 输出：一赛道一 sheet，每条脚本独立对标链接 ----------
 import math
 
@@ -529,7 +585,7 @@ def _row_height(text: str, width: float, line_h: float = 16.0, min_h: float = 24
     return max(min_h, lines * line_h + 5)
 
 
-def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict):
+def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict, card: dict = None):
     wb = Workbook()
     wb.remove(wb.active)
     for t in tracks:
@@ -615,6 +671,10 @@ def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict):
                 ws.row_dimensions[r].height = 14
                 r += 1
 
+    # 拍摄执行包（按场景聚合 + 道具清单）
+    if card:
+        make_shooting_sheet(wb, scripts_by_track, card)
+
     try:
         wb.save(out)
         log.info("脚本池已保存: %s（一赛道一 sheet，脚本间隔+自适应行高）", out)
@@ -634,6 +694,8 @@ def main():
     ap.add_argument("--force", action="store_true", help="重新生成全部脚本（调 LLM）")
     ap.add_argument("--xlsx-only", action="store_true", help="只从 scripts.json 重写 xlsx（不调 LLM）")
     ap.add_argument("--fix", action="store_true", help="只做时长兜底扩写+重写输出（调 LLM 扩写短脚本）")
+    ap.add_argument("--wave", choices=["test", "bulk"], default="bulk",
+                    help="test=测试波(每赛道1条，一周内验证方向)；bulk=量产(按需求卡数量)")
     args = ap.parse_args()
 
     card = load_card(args.card)
@@ -649,7 +711,7 @@ def main():
         scripts_by_track = read_json(d / "scripts.json") or {}
         if not tracks or not scripts_by_track:
             sys.exit("tracks.json / scripts.json 不存在，无法只重写 xlsx")
-        write_xlsx(out, tracks, scripts_by_track, by_id)
+        write_xlsx(out, tracks, scripts_by_track, by_id, card)
         return
 
     api_key = get_api_key()
@@ -683,7 +745,7 @@ def main():
         fix_hooks(scripts_by_track, analysis_map, card, api_key)
         ensure_shot_times(scripts_by_track, card)
         write_json(d / "scripts.json", scripts_by_track)
-        write_xlsx(out, tracks, scripts_by_track, by_id)
+        write_xlsx(out, tracks, scripts_by_track, by_id, card)
         return
 
     if out.exists() and not args.force:
@@ -695,6 +757,9 @@ def main():
     fewshot_text = json.dumps(examples[:2], ensure_ascii=False, indent=2) if examples else "（无）"
 
     n_per = int(card.get("生成设置", {}).get("每赛道脚本数", 5))
+    if args.wave == "test":
+        n_per = 1
+        log.info("测试波模式：每赛道仅生成 1 条，一周内回收数据定向后再跑 --wave bulk 量产")
     tdir = d / "transcripts"
     # 断点续跑：已生成过的赛道跳过 LLM 调用；不在当前 tracks 里的旧赛道丢弃
     track_names = {t.get("名称", "") for t in tracks}
@@ -723,11 +788,13 @@ def main():
         analysis_map = {a.get("video_id"): a for a in analysis}
         mode_lib = load_mode_lib(card)
         track_scripts = []
+        used_topics = []
         for idx in range(n_per):
             ref_vid = pool[idx % len(pool)]
             try:
                 prompt = gen_prompt(t, card, ref_vid, by_id, analysis_map,
-                                    transcripts, idx + 1, fewshot_text, mode_lib)
+                                    transcripts, idx + 1, fewshot_text, mode_lib,
+                                    used_topics)
                 result = call_deepseek([{"role": "user", "content": prompt}],
                                        api_key, temperature=0.8)
                 # 兼容两种返回：{"脚本":[...]} 或 直接是单条脚本对象
@@ -741,6 +808,7 @@ def main():
                 script["参考视频"] = ref_vid
                 script["改编角度"] = script.get("参考主题", "")[:30] or f"改编自{ref_vid}"
                 track_scripts.append(script)
+                used_topics.append(script["改编角度"])
                 log.info("赛道[%s] 脚本%d 生成成功（参考 %s）", tname, idx + 1, ref_vid)
             except Exception as e:
                 log.error("赛道[%s] 脚本%d 生成失败: %s", tname, idx + 1, e)

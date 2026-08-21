@@ -73,6 +73,8 @@ def main():
     for a in analysis.get("视频分析", []):
         vid = a.get("video_id")
         v = by_id.get(vid, {})
+        if v.get("对照"):
+            continue  # 对照组不进赛道聚类
         tf = d / "transcripts" / f"{vid}.txt"
         n_chars = len(tf.read_text(encoding="utf-8").strip()) if tf.exists() else 0
         rows.append({
@@ -102,12 +104,14 @@ def main():
       "常见结构": "步骤化结构，如：痛点→反常识结论→3个判断标准→CTA",
       "可拍场景": "适配客户可拍的画面场景",
       "代表视频": ["video_id1", "video_id2"],
-      "内容角度": ["角度1", "角度2", "角度3", "角度4", "角度5"]
+      "内容角度": ["角度1", "角度2", "角度3", "角度4", "角度5"],
+      "选题清单": ["具体选题1", "具体选题2", "...共15个"]
     }}
   ]
 }}
 - 代表视频从输入里选 2~3 个真实 video_id。
-- 内容角度：给该赛道列出 5 个互不重复的脚本切入点（例如：材料对比/价格真相/安装工艺/售后避坑/案例展示），让同赛道每条脚本讲不同侧面。"""
+- 内容角度：给该赛道列出 5 个互不重复的脚本切入点（例如：材料对比/价格真相/安装工艺/售后避坑/案例展示），让同赛道每条脚本讲不同侧面。
+- 选题清单：把该赛道的话题与角度交叉展开成 15 个具体可拍选题（每条一个明确的脚本切入点，如"台下盆发霉改造翻车""全铝vs不锈钢价格差多少"），供多轮脚本生成按序取用、避免重复。"""
 
     log.info("聚类 %d 条摘要 → %d 个赛道", len(rows), n_tracks)
     result = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.4)
@@ -115,8 +119,12 @@ def main():
     # 后处理：确定性分配真实代表视频（不信任 LLM 返回的 ID）
     assign_reps(result.get("赛道", []), rows, by_id)
     write_json(d / "tracks.json", result)
+    # 选题库沉淀：跨 run 复用，供 generate 按序取用、避开已用
+    topics = {t.get("名称", ""): t.get("选题清单", []) for t in result.get("赛道", [])}
+    write_json(d / "topics.json", topics)
     for t in result.get("赛道", []):
-        log.info("赛道: %s（代表视频 %s）", t.get("名称"), t.get("代表视频"))
+        log.info("赛道: %s（代表视频 %s，选题 %d 个）",
+                 t.get("名称"), t.get("代表视频"), len(t.get("选题清单") or []))
 
 
 if __name__ == "__main__":

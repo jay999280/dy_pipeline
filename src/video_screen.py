@@ -204,6 +204,12 @@ def main():
             sys.exit("videos_selected.json 中的 video_id 未在采集数据中找到")
         for v in picked:
             v["recommend"] = True
+        # 附加对照组（同账号低互动作品）：进转写/分析/蒸馏，供爆/非爆增量对照；聚类/生成会过滤
+        control = read_json(d / "对照视频.json") or {}
+        for v in control.get("视频", []):
+            v["对照"] = True
+            v["recommend"] = True
+        picked += control.get("视频", [])
         summary = {
             "客户": card.get("客户"),
             "来源": "第二轮人工筛选确认",

@@ -48,6 +48,7 @@ def distill_one(video: dict, transcript: str, analysis: dict, api_key: str) -> d
         result["video_id"] = video["aweme_id"]
         result["标题"] = video.get("desc", "")[:40]
         result["账号"] = video.get("author", "")
+        result["对照"] = bool(video.get("对照"))
         return result
     except Exception as e:
         log.error("[%s] 蒸馏失败: %s", video.get("aweme_id"), e)
@@ -142,6 +143,7 @@ def main():
             cards.append({
                 "video_id": c.get("video_id"),
                 "标题": c.get("标题", "")[:30],
+                "对照": c.get("对照", False),
                 "钩子公式化": c.get("钩子公式化", ""),
                 "语气特征": c.get("语气特征", []),
                 "段落节奏": c.get("段落节奏", ""),
@@ -155,7 +157,9 @@ def main():
 【客户业务】{card.get('业务简介', '').strip()}
 【客户卖点】{'、'.join(card.get('卖点') or [])}
 
-请把相似风格的视频归纳为 6~10 个"爆款模式"，只输出 JSON：
+注意：卡片中 `对照` 为 true 的是「同账号低互动对照组」——它们和爆款同人设同场景却没火。
+请把相似风格的视频归纳为 6~10 个"爆款模式"，并额外输出一组"爆款增量要素"（爆款 vs 对照的差异：
+对照组普遍缺什么钩子/节奏/情绪点，导致没火），只输出 JSON：
 {{"模式库":[
   {{"模式名":"如'避坑清单体'", "特征":"一句话概括该模式",
     "句式骨架":"该模式通用的句式模板，如'第一，千万别[做X]；第二，[正确做法]'",
@@ -164,8 +168,10 @@ def main():
     "互动设计":"结尾怎么引导互动",
     "代表视频":["video_id", ...],
     "客户适配":"改造成客户业务时的切入建议"}}
-]}}
-规则：模式之间要互斥（每条蒸馏卡只归入最像的一个模式）；句式骨架必须具体到能套用。
+],
+"增量要素":["爆款相对对照普遍具备的要素1", "要素2", "..."]}}
+规则：模式之间要互斥（每条蒸馏卡只归入最像的一个模式）；句式骨架必须具体到能套用；
+对照组不单独成模式，只用于提炼增量要素；代表视频只填爆款（对照=false）的 video_id。
 
 蒸馏卡数据：{json.dumps(cards, ensure_ascii=False)}"""
     log.info("归纳爆款模式库...")
@@ -183,6 +189,11 @@ def main():
         lines.append(f"- 代表视频：{'、'.join(m.get('代表视频') or [])}")
         lines.append(f"- 客户适配：{m.get('客户适配')}")
         lines.append("")
+    incr = result.get("增量要素") or []
+    if incr:
+        lines.append("## 爆款增量要素（爆款 vs 对照组差异）")
+        for x in incr:
+            lines.append(f"- {x}")
     (out_dir / "爆款模式库.md").write_text("\n".join(lines), encoding="utf-8")
     log.info("爆款模式库已生成: %s", out_dir / "爆款模式库.md")
 
