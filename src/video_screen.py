@@ -239,9 +239,19 @@ def main():
         if v["source"] == "profile":
             by_author.setdefault(v["author"], []).append(v)
     candidates = []
+    control = []
     for author, vs in by_author.items():
         vs.sort(key=lambda v: -v.get("digg_count", 0))
         candidates.extend(vs[:PER_ACCOUNT])
+        # 对照组：同账号低互动作品（中位数以下），供爆/非爆增量对照分析
+        med = _median([v.get("digg_count", 0) for v in vs])
+        low = [v for v in vs if v.get("digg_count", 0) < med]
+        control.extend(low[:2])
+    if control:
+        for v in control:
+            v["对照"] = True
+        write_json(d / "对照视频.json", {"客户": card.get("客户"), "视频": control})
+        log.info("记录 %d 条对照组（同账号低互动作品）", len(control))
     log.info("每个账号取 top %d，共 %d 条候选视频", PER_ACCOUNT, len(candidates))
     if not candidates:
         log.warning("主页没有采到视频（可能账号变更或被风控）")

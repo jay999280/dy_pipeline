@@ -156,12 +156,12 @@ def fix_hooks(scripts_by_track: dict, analysis_map: dict, card: dict, api_key: s
             if not _is_weak_hook(first, openers):
                 continue
             ref = analysis_map.get(str(s.get("参考视频", "")), {})
-            hook = ref.get("hook") or {}
+            hook = ref.get("钩子设计") or {}
             lo, hi = parse_duration(card)
             prompt = f"""你是抖音短视频钩子专家。下面这条脚本的首个镜头文案是平铺开场（自我介绍式），没有钩子。
 请只重写【首镜头文案】为强钩子，要求：
 1. 类型复刻参考视频的钩子：{hook.get('类型', '反常识/痛点/悬念')}
-2. 参考其开场手法（原话：{hook.get('前3秒说什么', '')}），但不得抄袭原句
+2. 参考其开场手法（原话：{hook.get('前3秒原话', '')}），但不得抄袭原句
 3. 结合客户业务（{card.get('业务简介', '').strip()}）和本脚本角度（{s.get('改编角度', '')}）
 4. 25~50 字，口语化、有现场感，禁止以"大家好/我是/今天给大家"开头
 只输出 JSON：{{"文案":"重写后的首镜头文案"}}
@@ -272,7 +272,10 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
     v = by_id.get(ref_vid, {})
     a = analysis_map.get(ref_vid, {})
     transcript = transcripts.get(ref_vid, "")
-    hook = a.get("hook") or {}
+    hook = a.get("钩子设计") or {}
+    rhythm = a.get("叙事结构与节奏") or {}
+    emotion = a.get("情绪共鸣点") or []
+    cta_design = a.get("结尾互动引导") or {}
     cta_lines = "\n".join(f'- "{c}"' for c in _cta_lib(card))
     return f"""你是抖音短视频编导。任务：把下面这一条【对标视频】**内容跟随式改编**成一条 {lo}~{hi} 秒的【客户】脚本（本赛道第 {script_no} 条）。
 
@@ -294,19 +297,26 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
 {transcript}
 
 【对标视频拆解】
-前3秒钩子（类型+原话）：类型={hook.get('类型', '')}｜原话={hook.get('前3秒说什么', '')}｜强度={hook.get('钩子强度', '')}
-结构拆解：{a.get('结构拆解')}
+钩子设计：类型={hook.get('类型', '')}｜原话={hook.get('前3秒原话', '')}｜抓人机制={hook.get('抓人机制', '')}｜强度={hook.get('强度', '')}
+叙事结构与节奏：{json.dumps(rhythm, ensure_ascii=False)}
+情绪共鸣点：{json.dumps(emotion, ensure_ascii=False)}
+结尾互动引导：{json.dumps(cta_design, ensure_ascii=False)}
 爆点归因：{a.get('爆点归因')}
 可复用模板：{a.get('可复用模板')}
 
-【改编规则：内容跟随】（核心！）
-1. 话题跟随：参考视频讲什么话题（台上盆台下盆避坑/发霉改造/价格揭秘/量尺安装/材料对比…），你的脚本就讲什么话题，不得换话题。只替换：品牌名、地区、报价方式、联系方式、展厅名称等客户特有信息
-2. 论点跟随：参考视频的核心论点、论证顺序、例子（先讲什么错、再讲什么对、怎么对比、举什么例子），逐条对应保留，换成客户语境下的同类表达
-3. 钩子跟随：前 3 秒按参考视频的钩子类型与开场方式重写（见拆解），禁止"大家好我是…"式平铺开场
-4. 语气跟随：保留参考视频的语气特征（强否定/清单体/反问/口语短句），照它的说话节奏写
-5. 段落跟随：镜头数量与参考视频叙事段落对应，时间分配参考其节奏；只有参考结构混乱时才用"钩子→痛点→方案→核心→CTA"兜底
-6. 红线：允许句子骨架相似（这是对标改编的本质），但不得整段逐字照抄（连续 20 字以上完全一致）；数字/尺寸/价格/材料承诺留白（写"以实测为准/私信发资料"）；产品植入放方案段
-7. 时长 {lo}~{hi} 秒：文案总量 {lo*4}~{hi*4} 字，5~8 个镜头，每镜头带"时间"字段（如"0-5s"），时间段连续覆盖
+【改编规则：内容跟随 + 差异化创新】
+1. 话题跟随：参考视频讲什么话题，你的脚本就讲什么话题，不得换话题。只替换品牌名、地区、报价方式、联系方式等客户特有信息
+2. 论点跟随：核心论点、论证顺序、例子逐条对应保留，换成客户语境下的同类表达
+3. 钩子跟随（七型）：前 3 秒按参考视频的钩子类型重写，类型从「反常识/痛点/悬念/冲突/信息差/利益承诺/共鸣」中选，参考视频用什么型就用什么型，禁止"大家好我是…"平铺开场。句式参考：价值型"花了XX元解决了困扰3年的问题"、共鸣型"是不是每次XX都受不了"、悬念型"我发现一个XX行业不告诉你的秘密"
+4. 语气跟随 + 个人风格：保留参考视频语气特征，同时融入客户人设的口头禅与表达习惯（见【客户人设】），让脚本"像客户本人说出来的话"
+5. 段落跟随 + 秒级基准：镜头数量与段落对应；参考结构混乱时用基准——0-3s 钩子 → 4-6s 痛点放大 → 7-12s 方案引入 → 13-20s 演示/成果 → 21-26s 数据/前后对比 → 27-35s 价值一句话+互动引导。目标完播率>40%，信息密度前置、无冗余铺垫
+6. 红线：允许句子骨架相似但不得连续 20 字逐字照抄；数字/尺寸/价格/材料承诺留白（"以实测为准/私信发资料"）；产品植入放方案段；禁用绝对化用语（"最好/第一/100%有效/全网最低"）
+7. 时长 {lo}~{hi} 秒：文案总量 {lo*4}~{hi*4} 字，5~8 个镜头
+
+【拍摄硬规则】（写进分镜表）
+- 竖屏 9:16；真人出镜优先（完播率比纯产品画面高 30%+）
+- 字幕必配（大量用户静音刷抖音）
+- 单镜头 ≤ 15s；景别与内容匹配：特写=情绪/细节，中景=讲解，全景=环境交代
 
 【CTA 选项库】（结尾从中选一种，结合客户卖点）
 {cta_lines}
@@ -316,7 +326,7 @@ def gen_prompt(track: dict, card: dict, ref_vid: str, by_id: dict,
 
 {mode_lib}
 
-只输出一个 JSON 对象：{{"发布文案":"带3-5个话题标签的发布文案","参考视频":"{ref_vid}","参考主题":"一句话复述参考视频讲什么","镜头":[{{"时间":"0-5s","画面":"拍什么（含道具/手势/字幕提示）","文案":"口播说什么"}}, ...]}}"""
+只输出一个 JSON 对象：{{"发布文案":"带3-5个话题标签的发布文案","参考视频":"{ref_vid}","参考主题":"一句话复述参考视频讲什么","改编说明":"跟了什么·换成了什么·本土化/个人风格体现在哪（一句）","镜头":[{{"时间":"0-5s","景别":"远景|全景|中景|近景|特写","画面":"拍什么（含道具/手势）","文案":"口播说什么","拍摄提示":"场景/道具/表演要点"}}],"字幕建议":"全程字幕+哪些关键词做花字","音效建议":"BGM情绪+关键音效点"}}"""
 
 
 def ensure_shot_times(scripts_by_track: dict, card: dict):
@@ -334,6 +344,90 @@ def ensure_shot_times(scripts_by_track: dict, card: dict):
                 dur = max(3.0, span * len(sh.get("文案", "")) / total)
                 sh["时间"] = f"{t:.0f}-{t + dur:.0f}s"
                 t += dur
+
+
+# ---------- 专家方法论注入：合规扫描（绝对化用语禁用，广告法） ----------
+_COMPLIANCE_BAN = ("最好", "第一", "100%", "百分百", "全网最低", "绝对", "零差评",
+                   "最便宜", "第一名", "顶级", "第一品牌")
+
+
+def compliance_scan(scripts: list) -> list:
+    """合规扫描：绝对化用语禁用。返回 [(脚本序号, 违规词, 片段)]。"""
+    warns = []
+    for si, s in enumerate(scripts, 1):
+        text = s.get("发布文案", "") + "".join(sh.get("文案", "") for sh in s.get("镜头", []))
+        for w in _COMPLIANCE_BAN:
+            if w in text:
+                warns.append((si, w, text[:30]))
+                break
+    return warns
+
+
+# ---------- 卖点覆盖矩阵（纯代码统计） ----------
+def _sp_keywords(sell: str) -> list:
+    return [p.strip() for p in re.split(r"[/／、，,·]", str(sell)) if p.strip()]
+
+
+def sellpoint_coverage(scripts_by_track: dict, card: dict) -> dict:
+    """卖点×脚本覆盖矩阵 + 各卖点覆盖数（零覆盖卖点告警）。"""
+    sells = card.get("卖点") or []
+    matrix = {}
+    for tname, scripts in scripts_by_track.items():
+        for i, s in enumerate(scripts, 1):
+            text = s.get("发布文案", "") + "".join(sh.get("文案", "") for sh in s.get("镜头", []))
+            hit = [sp for sp in sells if any(k and k in text for k in _sp_keywords(sp))]
+            matrix[f"{tname}#{i}"] = hit
+    coverage = {sp: sum(1 for hits in matrix.values() if sp in hits) for sp in sells}
+    return {"matrix": matrix, "coverage": coverage, "卖点数": len(sells)}
+
+
+# ---------- 发布文案三候选（LLM） ----------
+def gen_captions(script: dict, card: dict, api_key: str) -> list:
+    """为脚本生成 3 个发布文案候选（悬念式/数据式/痛点式）。"""
+    shots = script.get("镜头", [])
+    s_hook = shots[0].get("文案", "") if shots else ""
+    body = "".join(sh.get("文案", "") for sh in shots)[:300]
+    prompt = f"""你是短视频标题专家。下面是客户一条脚本的口播内容，请写 3 个不同风格的发布标题候选。
+只输出 JSON：{{"标题":[{{"风格":"悬念式","文案":"..."}},{{"风格":"数据式","文案":"..."}},{{"风格":"痛点式","文案":"..."}}]}}
+要求：每个 15-30 字，含钩子，口语化，可带 1-2 个话题标签；不编造数字，禁用"最好/第一/100%"。
+
+脚本首句：{s_hook}
+脚本正文（节选）：{body}
+客户业务：{card.get('业务简介', '').strip()}"""
+    try:
+        r = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.8)
+        return r.get("标题", [])
+    except Exception as e:
+        log.warning("发布文案三候选生成失败: %s", e)
+        return []
+
+
+# ---------- LLM Judge：四维评分 + 镜头级定位 ----------
+def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_key: str) -> dict:
+    """四维评分（对标匹配度/原创度/可执行性/红线合规）+ 镜头级问题定位。"""
+    out = {}
+    for tname, scripts in scripts_by_track.items():
+        for i, s in enumerate(scripts, 1):
+            ref = analysis_map.get(str(s.get("参考视频", "")), {})
+            hook_type = (ref.get("钩子设计") or {}).get("类型", "")
+            prompt = f"""你是短视频质量评审。下面是一条改编脚本，请按四维评分（每维 1-10 + 一句依据 + 问题镜头定位）。
+只输出 JSON：{{"对标匹配度":1到10,"对标依据":"一句话","原创度":1到10,"原创依据":"一句话","可执行性":1到10,"可执行依据":"一句话","红线合规":1到10,"红线依据":"一句话","问题镜头":[{{"镜头序号":数字,"问题":"钩子弱/台词拖沓/时长失衡/景别不当","建议":"一句话"}}]}}
+评分依据：
+- 对标匹配度：话题/论点顺序/钩子类型是否跟随对标（对标钩子类型：{hook_type}）
+- 原创度：表达是否差异化（换客户语境、本土化），而非逐字照抄
+- 可执行性：分镜表能否直接开拍（景别/时长/道具/表演齐备）
+- 红线合规：时长达标、无 20 字照抄、无绝对化用语、无事实编造、CTA 在位、钩子非平铺
+
+脚本：{json.dumps(s, ensure_ascii=False)}"""
+            try:
+                r = call_deepseek([{"role": "user", "content": prompt}], api_key, temperature=0.2)
+                r["_四维均分"] = round(
+                    sum(float(r.get(k, 0) or 0) for k in ("对标匹配度", "原创度", "可执行性", "红线合规")) / 4, 1)
+                s["评审"] = r
+                out[f"{tname}#{i}"] = r
+            except Exception as e:
+                log.warning("[%s]#%d judge 失败: %s", tname, i, e)
+    return out
 
 
 def check_similarity(scripts: list, transcripts: str, threshold: float = 0.5):
@@ -425,6 +519,9 @@ def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict):
             if ref:
                 c.hyperlink = ref
             caption = f"脚本{si}｜{s.get('改编角度', '')}｜{s.get('发布文案', '')}"
+            note = s.get("改编说明", "")
+            if note:
+                caption += f"｜{note}"
             c2 = ws.cell(row=r, column=2, value=caption)
             style(c2, font=_FONT_BOLD, fill=_FILL_SCRIPT, align=_LEFT_WRAP)
             for ci in (3, 4):
@@ -438,7 +535,13 @@ def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict):
                 pic = shot.get("画面", "")
                 text = shot.get("文案", "")
                 ts = shot.get("时间", "")
+                jing = shot.get("景别", "")
+                tip = shot.get("拍摄提示", "")
                 pic_show = f"[{ts}] {pic}" if ts else pic
+                if jing:
+                    pic_show = f"[{jing}] {pic_show}"
+                if tip:
+                    pic_show += f"（拍：{tip}）"
                 for ci in (1, 2):
                     cc = ws.cell(row=r, column=ci, value="")
                     style(cc)
@@ -448,6 +551,18 @@ def write_xlsx(out: Path, tracks: list, scripts_by_track: dict, by_id: dict):
                 style(c4, align=_LEFT_WRAP)
                 ws.row_dimensions[r].height = max(
                     _row_height(pic_show, widths["C"]), _row_height(text, widths["D"]))
+                r += 1
+
+            # ---- 脚本尾行：字幕/音效建议 ----
+            sub = s.get("字幕建议", "")
+            snd = s.get("音效建议", "")
+            if sub or snd:
+                for ci in (1, 3, 4):
+                    cc = ws.cell(row=r, column=ci, value="")
+                    style(cc)
+                c2 = ws.cell(row=r, column=2, value=f"字幕：{sub or '无'}｜音效：{snd or '无'}")
+                style(c2, font=_FONT, align=_LEFT_WRAP)
+                ws.row_dimensions[r].height = _row_height(f"字幕：{sub or '无'}｜音效：{snd or '无'}", widths["B"] + widths["C"])
                 r += 1
 
             # ---- 脚本间隔行（空白分隔，无边框） ----
@@ -601,6 +716,33 @@ def main():
     fix_hooks(scripts_by_track, analysis_map, card, api_key)
     # 镜头时间戳兜底：缺时间字段的按字数比例自动分配
     ensure_shot_times(scripts_by_track, card)
+
+    # ---- 专家注入：合规扫描（绝对化用语，广告法） ----
+    all_scripts = [s for lst in scripts_by_track.values() for s in lst]
+    comp_warns = compliance_scan(all_scripts)
+    if comp_warns:
+        log.warning("合规扫描：%d 处绝对化用语需修改: %s", len(comp_warns),
+                    [(w, t) for _, w, t in comp_warns[:5]])
+
+    # ---- 卖点覆盖矩阵 ----
+    cov = sellpoint_coverage(scripts_by_track, card)
+    write_json(d / "卖点覆盖.json", cov)
+    zero = [sp for sp, n in cov["coverage"].items() if n == 0]
+    if zero:
+        log.warning("卖点覆盖：%d 个卖点零覆盖（建议下轮定向注入）: %s", len(zero), zero)
+    else:
+        log.info("卖点覆盖矩阵已生成，%d 个卖点全部被覆盖", cov["卖点数"])
+
+    # ---- 发布文案三候选 ----
+    for lst in scripts_by_track.values():
+        for s in lst:
+            caps = gen_captions(s, card, api_key)
+            if caps:
+                s["标题候选"] = caps
+
+    # ---- LLM Judge：四维评分 + 镜头级定位 ----
+    judge_scripts(scripts_by_track, card, analysis_map, api_key)
+
     write_json(d / "scripts.json", scripts_by_track)
     write_xlsx(out, tracks, scripts_by_track, by_id)
 

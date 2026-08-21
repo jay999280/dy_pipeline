@@ -40,7 +40,7 @@ DISTILL_PROMPT = """你是短视频爆款拆解专家。下面是一条爆款视
 
 
 def distill_one(video: dict, transcript: str, analysis: dict, api_key: str) -> dict:
-    hint = f"钩子:{analysis.get('hook')}\n结构:{analysis.get('结构拆解')}\n爆点:{analysis.get('爆点归因')}"
+    hint = f"钩子:{analysis.get('钩子设计')}\n节奏:{analysis.get('叙事结构与节奏')}\n情绪:{analysis.get('情绪共鸣点')}\n爆点:{analysis.get('爆点归因')}"
     prompt = DISTILL_PROMPT.format(
         transcript=transcript[:2000] or "（无逐字稿）", hint=hint[:800] or "（无）")
     try:

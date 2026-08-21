@@ -101,13 +101,25 @@ def call_deepseek(messages: list, api_key: str, temperature: float = 0.3) -> dic
 SCHEMA_HINT = """只输出一个 JSON 对象，不要输出任何其他文字，字段如下：
 {
   "赛道倾向": "从给定候选赛道里选最接近的一个名称，或写'其他'",
-  "hook": {"前3秒说什么": "...", "类型": "反常识/痛点/悬念/冲突/信息差", "钩子强度": 1到5},
-  "结构拆解": [{"段": 1, "功能": "痛点放大/给方案/对比/CTA等", "原文要点": "概括而非抄原文"}],
+  "钩子设计": {
+    "前3秒原话": "逐字引用开头 3 秒说了什么",
+    "类型": "反常识/痛点/悬念/冲突/信息差/利益承诺/共鸣",
+    "抓人机制": "为什么有效：冲突对立/悬念缺口/利益直接/身份代入（一句说明）",
+    "强度": "1到10"
+  },
+  "叙事结构与节奏": {
+    "段落表": [{"段": 1, "起止秒": "0-3", "功能": "钩子/痛点放大/给方案/对比/CTA", "信息密度": "高|中|低", "转折点": "是|否", "要点": "概括而非抄原文"}],
+    "节奏曲线": "渐强/先扬后抑/高潮中置（一句描述）",
+    "总时长秒": 数字
+  },
+  "情绪共鸣点": [{"类型": "痛点|爽点|恐惧|好奇|认同|省钱", "触发秒": 数字, "触发语句": "原话", "共鸣逻辑": "触达了什么心理"}],
+  "结尾互动引导": {"形式": "评论|点赞|关注|私信|收藏", "话术": "原话", "设计逻辑": "为什么这个引导有效"},
   "爆点归因": "这条为什么爆：情绪冲突、信息密度还是争议点，一句话",
-  "评论区武器": "从评论数和高赞倾向推断的受众心理（没有评论数据就写'未知'）",
+  "评论区武器": "从评论数据推断的受众心理与高频痛点词；没有评论数据就写'未知'",
   "可复用模板": "去掉具体业务内容后的句式/结构骨架",
   "适配本客户": "改成客户业务后最自然的切入角度，2-3句"
-}"""
+}
+硬性要求：段落表起止秒累计覆盖总时长的 90% 以上；情绪共鸣点必须带触发秒。"""
 
 
 def build_prompt(video: dict, transcript: str, card: dict, track_names: list) -> str:
@@ -116,6 +128,7 @@ def build_prompt(video: dict, transcript: str, card: dict, track_names: list) ->
 【客户业务】{card.get('业务简介', '').strip()}
 【客户卖点】{'、'.join(card.get('卖点') or [])}
 【客户人设】{card.get('人设', '')}
+【目标客户】{card.get('目标客户', '')}
 【可选赛道】{'、'.join(track_names) if track_names else '由你归纳'}
 
 【视频标题】{video.get('desc', '')}
@@ -123,10 +136,31 @@ def build_prompt(video: dict, transcript: str, card: dict, track_names: list) ->
 【点赞】{video.get('digg_count', 0)} 【评论】{video.get('comment_count', 0)} 【转发】{video.get('share_count', 0)}
 【时长秒】{round((video.get('duration_ms') or 0) / 1000)}
 
-【口播逐字稿】
-{transcript[:4000] or '（无逐字稿，仅凭标题和数据分析）'}
+【口播逐字稿 + 时间轴 + 画面分镜】
+{transcript[:8000] or '（无逐字稿，仅凭标题和数据分析）'}
 
 {SCHEMA_HINT}"""
+
+
+def assemble_context(d: Path, tdir: Path, v: dict) -> str:
+    """组装拆解上下文：画面分镜表(前置，短) + 逐字稿全文 + 时间轴。"""
+    vid = v["aweme_id"]
+    parts = []
+    vis = d / "vision" / f"{vid}.json"
+    if vis.exists():
+        shots = read_json(vis)
+        if shots:
+            parts.append("【画面分镜表】\n" + json.dumps(shots, ensure_ascii=False))
+    tf = tdir / f"{vid}.txt"
+    if tf.exists():
+        parts.append("【逐字稿全文】\n" + tf.read_text(encoding="utf-8").strip())
+    ts = tdir / f"{vid}.json"
+    if ts.exists():
+        segs = (read_json(ts) or {}).get("segments", [])
+        if segs:
+            parts.append("【逐字稿时间轴】\n" + "".join(
+                f"[{s['start']:.0f}s-{s['end']:.0f}s]{s['text']}" for s in segs))
+    return "\n\n".join(parts)
 
 
 def analyze_one(video: dict, transcript: str, card: dict, track_names: list, api_key: str) -> dict:
@@ -191,10 +225,7 @@ def main():
     with cf.ThreadPoolExecutor(max_workers=2) as ex:
         futs = []
         for v in items:
-            txt = ""
-            tf = tdir / f"{v['aweme_id']}.txt"
-            if tf.exists():
-                txt = tf.read_text(encoding="utf-8")
+            txt = assemble_context(d, tdir, v)
             futs.append(ex.submit(analyze_one, v, txt, card, track_names, api_key))
         for i, fut in enumerate(cf.as_completed(futs), 1):
             results.append(fut.result())
@@ -202,7 +233,7 @@ def main():
 
     def _hook_score(a):
         try:
-            return -float((a.get("hook") or {}).get("钩子强度") or 0)
+            return -float((a.get("钩子设计") or {}).get("强度") or 0)
         except (TypeError, ValueError):
             return 0
     # 合并旧的（已成功的）+ 新的，按 video_id 去重（新的覆盖旧的）
