@@ -218,9 +218,29 @@ class DouyinCollector:
             log.info("[%s] 接口拦截 0 条，router_data 兜底后共 %d 条",
                      self.current_source_key, self.src_count)
 
+    def _save_partial(self, partial: Path):
+        """增量落盘已采数据（断点续传）。"""
+        try:
+            items = sorted(self.seen.values(), key=lambda x: -x.get("digg_count", 0))
+            partial.write_text(json.dumps({"视频": items}, ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+        except Exception:
+            pass
+
     async def run(self, out_json: Path) -> dict:
         self.out_dir = out_json.parent
+        partial = out_json.with_suffix(".partial.json")
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        # 断点续传：预热已采数据（采集中途崩溃可续）
+        if partial.exists():
+            try:
+                prev = json.loads(partial.read_text(encoding="utf-8"))
+                for v in prev.get("视频", []):
+                    if v.get("aweme_id"):
+                        self.seen[str(v["aweme_id"])] = v
+                log.info("断点续传：预热 %d 条已采数据", len(self.seen))
+            except Exception:
+                pass
         async with async_playwright() as p:
             browser = await p.chromium.launch_persistent_context(
                 user_data_dir=str(PROFILE_DIR),
@@ -257,11 +277,13 @@ class DouyinCollector:
                 src_url = str(src_url).strip()
                 if src_url:
                     await self._collect_profile(page, src_url)
+                    self._save_partial(partial)
 
             for kw in self.card.get("关键词") or []:
                 kw = str(kw).strip()
                 if kw:
                     await self._collect_search(page, kw)
+                    self._save_partial(partial)
 
             await browser.close()
 

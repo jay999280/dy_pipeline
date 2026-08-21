@@ -14,6 +14,11 @@ from openpyxl import load_workbook
 from analyze import call_deepseek, get_api_key
 from common import DATA, load_card, read_json, run_dir, setup_log, write_json
 
+try:
+    from rapidfuzz import fuzz as _rfuzz
+except ImportError:
+    _rfuzz = None
+
 log = logging.getLogger(__name__)
 
 
@@ -430,8 +435,15 @@ def judge_scripts(scripts_by_track: dict, card: dict, analysis_map: dict, api_ke
     return out
 
 
+def _similarity(a: str, b: str) -> float:
+    """字符串相似度 0-1：rapidfuzz 优先，降级 difflib。"""
+    if _rfuzz is not None:
+        return _rfuzz.ratio(a, b) / 100.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
 def check_similarity(scripts: list, transcripts: str, threshold: float = 0.5):
-    """查重闸：先查整句包含（快），再抽样 10 个窗口做模糊比对。"""
+    """查重闸：先查整句包含（快），再全窗口模糊比对（rapidfuzz，不抽样）。"""
     warnings = []
     for si, s in enumerate(scripts):
         for line in s.get("镜头", []):
@@ -441,14 +453,47 @@ def check_similarity(scripts: list, transcripts: str, threshold: float = 0.5):
             if text in transcripts:  # 整句照搬，直接警告
                 warnings.append((si, text[:30]))
                 continue
-            # 抽样模糊比对，控制计算量
-            step = max(1, (len(transcripts) - len(text)) // 10)
-            for i in range(0, max(1, len(transcripts) - len(text)), step):
-                sub = transcripts[i:i + len(text)]
-                if difflib.SequenceMatcher(None, text, sub).ratio() > threshold:
+            # 全窗口滑窗（rapidfuzz 快，无需抽样）
+            n = len(text)
+            step = max(1, n // 2)
+            for i in range(0, max(1, len(transcripts) - n + 1), step):
+                sub = transcripts[i:i + n]
+                if _similarity(text, sub) > threshold:
                     warnings.append((si, text[:30]))
                     break
     return warnings
+
+
+def structure_similarity(a: dict, b: dict) -> float:
+    """结构同质化：各镜头时长分布的相似度（节奏雷同度）。"""
+    shots_a = a.get("镜头", [])
+    shots_b = b.get("镜头", [])
+    if not shots_a or not shots_b:
+        return 0.0
+
+    def spans(shots):
+        out = []
+        for sh in shots:
+            m = re.findall(r"\d+", str(sh.get("时间", "")))
+            out.append(int(m[1]) - int(m[0]) if len(m) >= 2 else 0)
+        return out
+
+    sa, sb = spans(shots_a), spans(shots_b)
+    return _similarity("-".join(map(str, sa)), "-".join(map(str, sb)))
+
+
+def check_structure_dupes(scripts_by_track: dict, threshold: float = 0.8) -> list:
+    """同池脚本两两比对结构相似度，>阈值提示"换叙事顺序"。"""
+    warns = []
+    all_s = [(f"{tname}#{i}", s) for tname, lst in scripts_by_track.items() for i, s in enumerate(lst, 1)]
+    for x in range(len(all_s)):
+        for y in range(x + 1, len(all_s)):
+            name_a, s_a = all_s[x]
+            name_b, s_b = all_s[y]
+            sim = structure_similarity(s_a, s_b)
+            if sim > threshold:
+                warns.append((name_a, name_b, round(sim, 2)))
+    return warns
 
 
 def sheet_name(name: str) -> str:
@@ -757,6 +802,12 @@ def main():
     if warns:
         log.warning("查重提示：%d 句与参考逐字稿相似度过高，建议人工改写: %s",
                     len(warns), warns[:5])
+
+    # 结构同质化检查（防"换词不换骨"）
+    dupes = check_structure_dupes(scripts_by_track)
+    if dupes:
+        log.warning("结构同质化：%d 对脚本节奏雷同（建议换叙事顺序）: %s",
+                    len(dupes), dupes[:5])
 
 
 if __name__ == "__main__":

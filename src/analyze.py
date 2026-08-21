@@ -8,6 +8,7 @@ LLM 端点通过环境变量配置（默认 DeepSeek 官方 Chat Completions）�
   LLM_API_KEY      API Key（也可用 DEEPSEEK_API_KEY）
 """
 import concurrent.futures as cf
+import hashlib
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ from pathlib import Path
 
 import requests
 
-from common import load_card, read_json, run_dir, setup_log, write_json
+from common import DATA, load_card, read_json, run_dir, setup_log, write_json
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,32 @@ MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
 
 def get_api_key():
     return os.environ.get("LLM_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
+
+
+# ---------- LLM 调用缓存（同 prompt+model+temp 命中则零计费） ----------
+def _cache_key(messages: list, model: str, temperature: float) -> str:
+    raw = json.dumps({"messages": messages, "model": model, "temperature": temperature},
+                     ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str):
+    p = DATA / ".llm_cache" / key[:2] / (key + ".json")
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    return None
+
+
+def _cache_put(key: str, result: dict):
+    p = DATA / ".llm_cache" / key[:2] / (key + ".json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _extract_json(text: str):
@@ -44,6 +71,17 @@ def _extract_json(text: str):
 
 
 def call_llm(messages: list, api_key: str, temperature: float = 0.3) -> dict:
+    key = _cache_key(messages, MODEL, temperature)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    result = _call_llm_impl(messages, api_key, temperature)
+    if result:
+        _cache_put(key, result)
+    return result
+
+
+def _call_llm_impl(messages: list, api_key: str, temperature: float = 0.3) -> dict:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if PROTOCOL == "responses":
         url = f"{API_BASE}/responses"

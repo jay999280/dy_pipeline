@@ -24,9 +24,40 @@ def load_card(path: str) -> dict:
         sys.exit(f"需求卡不存在: {p}")
     with open(p, encoding="utf-8") as f:
         card = yaml.safe_load(f)
+    errors = []
+    # 必填字段
     for key in ("客户", "业务简介", "生成设置"):
-        if key not in card:
-            sys.exit(f"需求卡缺少必填字段: {key}")
+        if key not in card or not card.get(key):
+            errors.append(f"缺少必填字段: {key}")
+    # 生成设置
+    gs = card.get("生成设置") or {}
+    for k in ("赛道数", "每赛道脚本数"):
+        if k not in gs:
+            errors.append(f"生成设置缺少: {k}")
+        elif not isinstance(gs[k], int):
+            errors.append(f"生成设置.{k} 必须是整数，当前为 {gs[k]!r}")
+    if gs.get("主攻赛道") and not isinstance(gs.get("主攻赛道"), str):
+        errors.append("生成设置.主攻赛道 必须是字符串（赛道名或留空）")
+    # 转写引擎枚举
+    eng = (card.get("转写设置") or {}).get("引擎", "auto")
+    if eng not in ("auto", "doubao", "whisper"):
+        errors.append(f"转写设置.引擎 取值非法: {eng!r}（应为 auto/doubao/whisper）")
+    # 视觉模型/抽帧间隔
+    vis = card.get("视觉设置") or {}
+    if vis.get("抽帧间隔秒") is not None:
+        try:
+            if float(vis["抽帧间隔秒"]) <= 0:
+                errors.append("视觉设置.抽帧间隔秒 必须 > 0")
+        except (TypeError, ValueError):
+            errors.append(f"视觉设置.抽帧间隔秒 非法: {vis['抽帧间隔秒']!r}")
+    # 语料扩充账号结构
+    for i, a in enumerate(card.get("语料扩充账号") or []):
+        if isinstance(a, dict) and not a.get("sec_uid"):
+            errors.append(f"语料扩充账号第 {i+1} 项缺少 sec_uid")
+        elif not isinstance(a, (dict, str)):
+            errors.append(f"语料扩充账号第 {i+1} 项格式非法（应为 昵称+sec_uid 对象或字符串）")
+    if errors:
+        sys.exit("需求卡校验失败（" + str(p) + "）：\n  - " + "\n  - ".join(errors))
     return card
 
 

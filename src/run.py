@@ -82,6 +82,27 @@ def run_stage(card_path: str, stage: str, d: Path, force: bool):
         sys.exit(f"阶段 {stage} 失败，退出码 {r.returncode}（已产生的中间结果保留，--resume 可继续）")
 
 
+def print_status(card_path: str):
+    """查看当前运行进度与门禁状态。"""
+    card = load_card(card_path)
+    d = run_dir(card, resume=True)
+    print(f"客户: {card.get('客户')}")
+    print(f"运行目录: {d}")
+    print(f"{'阶段':<16}{'状态':<10}产物")
+    print("-" * 56)
+    for st in STAGES:
+        done = is_done(d, st)
+        print(f"{st:<16}{'[完成]' if done else '[待跑]':<10}{stage_output(d, st).name}")
+    acc = read_json(d / "accounts_selected.json") or []
+    vid = read_json(d / "videos_selected.json") or []
+    if not acc:
+        print("\n>>> 卡在第一轮门禁：查看 账号候选清单.md，填写 accounts_selected.json 后重跑")
+    elif not vid:
+        print("\n>>> 卡在第二轮门禁：查看 爆款视频候选清单.md，填写 videos_selected.json 后重跑")
+    else:
+        print("\n>>> 两轮门禁已过，重跑 run.py 即继续后续阶段")
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser()
@@ -89,7 +110,12 @@ def main():
     ap.add_argument("--only", choices=STAGES + OPTIONAL, help="只跑指定阶段")
     ap.add_argument("--resume", action="store_true", help="沿用上一次运行目录")
     ap.add_argument("--force", action="store_true", help="重跑 collector/generate")
+    ap.add_argument("--status", action="store_true", help="查看当前运行进度与门禁状态")
     args = ap.parse_args()
+
+    if args.status:
+        print_status(args.card)
+        return
 
     card = load_card(args.card)
     d = run_dir(card, resume=args.resume)
