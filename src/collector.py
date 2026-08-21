@@ -287,6 +287,83 @@ class DouyinCollector:
         return summary
 
 
+# 评论接口（用于评论区挖掘）
+COMMENT_MARKS = ("comment/list", "comment/list/reply")
+
+
+def _extract_comments(data: dict) -> list:
+    """从评论接口响应提取评论列表：[{"text","赞","回复数"}]。"""
+    out = []
+    if not isinstance(data, dict):
+        return out
+    comments = data.get("comments")
+    if comments is None:
+        comments = data.get("data")
+    if not isinstance(comments, list):
+        return out
+    for c in comments:
+        if not isinstance(c, dict):
+            continue
+        text = c.get("text", "")
+        if not text:
+            continue
+        out.append({
+            "text": text,
+            "赞": c.get("digg_count", 0) or 0,
+            "回复数": c.get("reply_comment_total", 0) or c.get("reply_count", 0) or 0,
+        })
+    return out
+
+
+async def collect_comments(video_ids: list, out_dir: Path, max_per: int = 30):
+    """对给定视频列表采集评论区，落 comments/<vid>.json（断点续跑）。"""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch_persistent_context(
+            user_data_dir=str(PROFILE_DIR), headless=False, channel="chrome",
+            viewport={"width": 1440, "height": 900},
+            args=["--disable-blink-features=AutomationControlled"])
+        page = browser.pages[0] if browser.pages else await browser.new_page()
+        await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=60000)
+        await asyncio.sleep(2)
+        for vid in video_ids:
+            jso = out_dir / f"{vid}.json"
+            if jso.exists():
+                continue
+            comments = []
+
+            async def _on_resp(resp):
+                if any(m in resp.url for m in COMMENT_MARKS):
+                    try:
+                        d = await resp.json()
+                        comments.extend(_extract_comments(d))
+                    except Exception:
+                        pass
+
+            page.on("response", _on_resp)
+            try:
+                await page.goto(f"https://www.douyin.com/video/{vid}",
+                                wait_until="domcontentloaded", timeout=60000)
+                await asyncio.sleep(3)
+                for _ in range(8):
+                    await page.mouse.wheel(0, random.randint(800, 1500))
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
+                    if len(comments) >= max_per:
+                        break
+            finally:
+                page.remove_listener("response", _on_resp)
+            # 去重
+            seen, uniq = set(), []
+            for c in comments:
+                if c["text"] not in seen:
+                    seen.add(c["text"])
+                    uniq.append(c)
+            write_json(jso, uniq[:max_per])
+            log.info("评论采集 %s: %d 条", vid, len(uniq[:max_per]))
+        await browser.close()
+
+
 def main():
     import argparse
     from common import setup_log

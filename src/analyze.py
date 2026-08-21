@@ -143,7 +143,7 @@ def build_prompt(video: dict, transcript: str, card: dict, track_names: list) ->
 
 
 def assemble_context(d: Path, tdir: Path, v: dict) -> str:
-    """组装拆解上下文：画面分镜表(前置，短) + 逐字稿全文 + 时间轴。"""
+    """组装拆解上下文：画面分镜表(前置，短) + 评论 + 逐字稿全文 + 时间轴。"""
     vid = v["aweme_id"]
     parts = []
     vis = d / "vision" / f"{vid}.json"
@@ -151,6 +151,12 @@ def assemble_context(d: Path, tdir: Path, v: dict) -> str:
         shots = read_json(vis)
         if shots:
             parts.append("【画面分镜表】\n" + json.dumps(shots, ensure_ascii=False))
+    cmt = d / "comments" / f"{vid}.json"
+    if cmt.exists():
+        comments = read_json(cmt)
+        if comments:
+            top = sorted(comments, key=lambda c: -c.get("赞", 0))[:20]
+            parts.append("【评论区 TOP20】\n" + json.dumps(top, ensure_ascii=False))
     tf = tdir / f"{vid}.txt"
     if tf.exists():
         parts.append("【逐字稿全文】\n" + tf.read_text(encoding="utf-8").strip())
