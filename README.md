@@ -1,6 +1,13 @@
-# dy_pipeline — 抖音对标视频 → 脚本批量生成流水线
+# dy-pipeline-skill — 抖音对标视频 → 脚本批量生成流水线
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub Stars](https://img.shields.io/github/stars/jay999280/dy-pipeline-skill?style=social)](https://github.com/jay999280/dy-pipeline-skill)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
 从抖音「像人一样刷视频找对标」，到批量产出**可直接开拍**的脚本池 Excel。一条命令跑完：找对标 → 看懂视频（转写+视觉）→ 拆解爆款逻辑 → 聚类赛道 → 批量生成脚本 → 自动质量评审。
+
+> 💡 也可作为 **Codex / Claude Code / WorkBuddy 等 AI 助手的技能**使用：项目根目录的 `AGENTS.md` 是给 AI 的作业手册，AI 进入项目自动加载，说一句"跑流水线"即可全流程执行。
 
 ## 功能特性
 
@@ -24,32 +31,21 @@ video_screen(搜索驱动找对标) → transcribe(转写+抽帧) → vision(视
 可选：account_screen(账号深挖模式) | collect_more(语料扩充) | feedback(试水复盘)
 ```
 
-## 环境要求
-
-- Python 3.10+（推荐 3.13/3.14）
-- ffmpeg（视频抽音频/抽帧）
-- 一个 OpenAI 兼容的 LLM API（文本+视觉，默认智谱 glm-4-flash / glm-4v-flash，均有免费档）
-- Chrome 浏览器（采集用 Playwright 挂载，需先 `playwright install chrome`）
-
-## 安装
+## 安装（3 步，约 2 分钟）
 
 ```bash
-git clone https://github.com/jay999280/dy_pipeline.git
-cd dy_pipeline
-pip install -r requirements.txt
-playwright install chrome
+# 1. 克隆（或用右上角 "Use this template" 一键复制成自己的仓库）
+git clone https://github.com/jay999280/dy-pipeline-skill.git
+cd dy-pipeline-skill
+
+# 2. 一键安装（自动建虚拟环境/装依赖/装 Chrome/生成 .env）
+#    Windows: 双击 install.ps1 或 powershell -ExecutionPolicy Bypass -File install.ps1
+#    Linux/macOS: bash install.sh
+
+# 3. 填 .env（LLM_API_KEY，智谱免费: https://open.bigmodel.cn）
 ```
 
-配置环境变量：
-
-```bash
-export LLM_API_KEY=你的key          # 文本 LLM
-export LLM_API_BASE=https://open.bigmodel.cn/api/paas/v4   # 智谱默认
-export LLM_MODEL=glm-4-flash
-# 可选：豆包 ASR（转写提速几十倍）
-# export VOLC_ASR_APPID=...
-# export VOLC_ASR_ACCESS_TOKEN=...
-```
+依赖：Python 3.10+、ffmpeg（一键脚本会检测/提示安装）、Chrome。
 
 ## 快速开始
 

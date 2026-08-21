@@ -16,3 +16,6 @@ venv/
 .vscode/
 .idea/
 config/志强_需求卡.yaml
+
+# 密钥配置（本地）
+.env

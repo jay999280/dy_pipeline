@@ -3,6 +3,7 @@ requests>=2.32
 pyyaml>=6.0
 openpyxl>=3.1
 rapidfuzz>=3.0
+python-dotenv>=1.0
 # 本地 ASR（未配置豆包 ASR 时使用）
 faster-whisper>=1.1
 # 测试（可选）

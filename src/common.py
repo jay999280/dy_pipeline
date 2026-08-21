@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 import logging
+import os
 import sys
 from datetime import datetime
 
@@ -11,6 +12,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 CONFIG = ROOT / "config"
+
+# 加载项目根目录 .env（密钥配置）；未安装 python-dotenv 时静默跳过
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
