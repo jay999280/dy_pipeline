@@ -30,7 +30,7 @@ CARD = str(SRC.parent / "config" / "示例_需求卡.yaml")
 # ---------- 需求卡校验 ----------
 def test_load_card_ok():
     card = load_card(CARD)
-    assert card["客户"] == "示例客户"
+    assert card["客户"] == "老王羊肉汤"
 
 
 def test_load_card_reject_bad_engine(tmp_path):
@@ -81,19 +81,19 @@ def test_hook_detection():
     card = load_card(CARD)
     openers = _flat_openers(card)
     assert "我是老王" in openers
-    assert _is_weak_hook("我是老王今天讲橱柜", openers)
+    assert _is_weak_hook("我是老王今天讲羊肉汤", openers)
     assert not _is_weak_hook("千万别装错，坑你两万", openers)
 
 
 def test_cta_lib():
     card = load_card(CARD)
     cta = _cta_lib(card)
-    assert any("杭州" in c for c in cta)
+    assert any("熬汤时间表" in c for c in cta)
 
 
 # ---------- 合规扫描 / 卖点覆盖 ----------
 def test_compliance_scan():
-    scripts = [{"发布文案": "最好的橱柜", "镜头": [{"文案": "第一品牌，100%有效"}]},
+    scripts = [{"发布文案": "最好的羊肉汤", "镜头": [{"文案": "第一品牌，100%有效"}]},
                {"发布文案": "正常", "镜头": [{"文案": "防水防潮"}]}]
     warns = compliance_scan(scripts)
     assert len(warns) == 1 and warns[0][1] == "最好"
